@@ -56,7 +56,7 @@ FULL_SCALES = [100, 1000, 5000, 10000, 25000, 50000]
 QUICK_SCALES = [100, 1000]
 
 PARAPHRASES = [
-    "What's my name?", "What should I be called?", "Who am I?",
+    "What's my name?", "Who am I?",
     "What's my bow?", "What weapon do I carry?",
     "What are we searching for?", "What is our quest?",
     "Where is the crown hidden?", "Where do we find the crown?",
@@ -257,26 +257,25 @@ async def suite_storage(cfg: HyperMemConfig, rng: random.Random,
 
 async def suite_worldida_stability(cfg: HyperMemConfig, rng: random.Random,
                                    scales: list[int], turns: int) -> dict:
-    rows = {}
-    for scale in scales:
-        hm = HyperMEM(cfg)
-        llm = hm._llm
-        prev = None
-        false_changes, lats = 0, []
-        for turn in range(turns):
-            user_msg = f"Message number {turn} in this conversation."
-            ai_msg = f"*Responds naturally.* This is response {turn}."
-            start = time.perf_counter()
-            new = await hm.update_world_ida(user_msg, ai_msg, PERSONA)
-            lats.append((time.perf_counter() - start) * 1000)
-            if prev is not None and new.meta.scene_changed:
-                if prev.scene.location == new.scene.location:
-                    false_changes += 1
-            prev = new
-        rows[f"worldida_false_scene_changes@{scale}"] = false_changes
-        rows[f"worldida_update_p50_ms@{scale}"] = round(statistics.median(lats), 1)
-        await hm.close()
-    return rows
+    hm = HyperMEM(cfg)
+    llm = hm._llm
+    prev = None
+    false_changes, lats = 0, []
+    for turn in range(turns):
+        user_msg = f"Message number {turn} in this conversation."
+        ai_msg = f"*Responds naturally.* This is response {turn}."
+        start = time.perf_counter()
+        new = await hm.update_world_ida(user_msg, ai_msg, PERSONA)
+        lats.append((time.perf_counter() - start) * 1000)
+        if prev is not None and new.meta.scene_changed:
+            if prev.scene.location == new.scene.location:
+                false_changes += 1
+        prev = new
+    await hm.close()
+    return {
+        "worldida_false_scene_changes": false_changes,
+        "worldida_update_p50_ms": round(statistics.median(lats), 1),
+    }
 
 
 SUITES = {
@@ -307,18 +306,6 @@ async def run_suite(name: str, model: str, endpoint: str, seed: int,
     return await fn(cfg, rng, scales)
 
 
-def aggregate(results: list[dict]) -> dict:
-    keys = sorted({k for r in results for k in r})
-    out = {}
-    for k in keys:
-        vals = [r[k] for r in results if k in r]
-        out[k] = {
-            "mean": round(statistics.mean(vals), 3),
-            "std": round(statistics.stdev(vals), 3) if len(vals) > 1 else 0.0,
-        }
-    return out
-
-
 def render_report() -> str:
     lines = [
         "# HyperMEM — Benchmark Report",
@@ -347,6 +334,26 @@ def render_report() -> str:
     return "\n".join(lines)
 
 
+def build_results(runs: list[dict]) -> dict:
+    """Aggregate per-(suite, metric, model) mean/std from raw runs."""
+    suites: dict = {}
+    for r in runs:
+        for metric, val in r["result"].items():
+            suites.setdefault(r["suite"], {}).setdefault(metric, {}).setdefault(r["model"], []).append(val)
+    out = {}
+    for suite, metrics in suites.items():
+        out[suite] = {}
+        for metric, by_model in metrics.items():
+            out[suite][metric] = {
+                model: {
+                    "mean": round(statistics.mean(vals), 3),
+                    "std": round(statistics.stdev(vals), 3) if len(vals) > 1 else 0.0,
+                }
+                for model, vals in by_model.items()
+            }
+    return out
+
+
 async def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -358,6 +365,8 @@ async def main():
     parser.add_argument("--scales", type=str, default="")
     parser.add_argument("--turns", type=int, default=0)
     parser.add_argument("--endpoint", default="http://localhost:11434")
+    parser.add_argument("--resume", action="store_true",
+                        help="skip runs already present in --out (crash recovery)")
     parser.add_argument("--out", default=str(Path(__file__).parent / "benchmark_results_full.json"))
     parser.add_argument("--report", default=str(Path(__file__).parent / "benchmark_report_full.md"))
     args = parser.parse_args()
@@ -381,55 +390,71 @@ async def main():
     if invalid:
         parser.error(f"unknown suites: {', '.join(sorted(invalid))}")
 
+    runs: list[dict] = []
+    if args.resume and Path(args.out).exists():
+        saved = json.loads(Path(args.out).read_text(encoding="utf-8"))
+        runs = saved.get("runs", [])
+        print(f"Resuming: {len(runs)} runs already completed")
+
+    done = {(r["model"], r["suite"], r["seed"]) for r in runs}
     total_runs = len(models) * len(suites) * seeds
     print("=" * 64)
     print("HyperMEM — Full Benchmark")
     print("=" * 64)
     print(f"Models:  {models}")
     print(f"Suites:  {suites}")
-    print(f"Seeds:   {seeds}   |   runs: {total_runs}")
+    print(f"Seeds:   {seeds}   |   runs: {total_runs} ({total_runs - len(done)} remaining)")
     print(f"Scales:  {scales}   |   turns: {turns}")
     print(f"Endpoint:{args.endpoint}")
 
-    RESULTS["suites"] = {}
-    run_count = 0
     start_all = time.perf_counter()
     for model in models:
         print(f"\n### model: {model}")
         for suite in suites:
-            suite_results = []
             for seed in range(1, seeds + 1):
-                run_count += 1
+                if (model, suite, seed) in done:
+                    print(f"  [skip] {suite} seed={seed} (already done)")
+                    continue
                 t0 = time.perf_counter()
-                print(f"  [{run_count}/{total_runs}] {suite} seed={seed} ...", flush=True)
+                print(f"  {suite} seed={seed} ...", flush=True)
                 r = await run_suite(suite, model, args.endpoint, seed, scales, turns)
-                suite_results.append(r)
+                runs.append({"model": model, "suite": suite, "seed": seed, "result": r})
                 print(f"      done in {time.perf_counter() - t0:.0f}s", flush=True)
-            RESULTS["suites"].setdefault(suite, {})
-            agg = aggregate(suite_results)
-            for metric, stat in agg.items():
-                RESULTS["suites"][suite].setdefault(metric, {})[model] = stat
+                _checkpoint(args.out, args.report, runs, models, suites, seeds,
+                            scales, turns, args.endpoint, start_all)
 
-    RESULTS["meta"] = {
-        "models": models,
-        "suites": suites,
-        "seeds": seeds,
-        "scales": scales,
-        "turns": turns,
-        "endpoint": args.endpoint,
-        "python": sys.version.split()[0],
-        "platform": sys.platform,
-        "wall_seconds": round(time.perf_counter() - start_all, 1),
-    }
-
-    Path(args.out).write_text(json.dumps(RESULTS, indent=2), encoding="utf-8")
-    Path(args.report).write_text(render_report(), encoding="utf-8")
-
+    _checkpoint(args.out, args.report, runs, models, suites, seeds,
+                scales, turns, args.endpoint, start_all)
+    n = len(runs)
     print(f"\n{'=' * 64}")
-    print(f"Wall time: {RESULTS['meta']['wall_seconds']}s")
+    print(f"Completed {n} runs in {round(time.perf_counter() - start_all)}s")
     print(f"JSON:   {args.out}")
     print(f"Report: {args.report}")
     print("=" * 64)
+
+
+def _checkpoint(out_path, report_path, runs, models, suites, seeds, scales,
+                turns, endpoint, start_all) -> None:
+    data = {
+        "runs": runs,
+        "suites": build_results(runs),
+        "meta": {
+            "models": models,
+            "suites": suites,
+            "seeds": seeds,
+            "scales": scales,
+            "turns": turns,
+            "endpoint": endpoint,
+            "python": sys.version.split()[0],
+            "platform": sys.platform,
+            "wall_seconds": round(time.perf_counter() - start_all, 1),
+        },
+    }
+    RESULTS["runs"] = runs
+    RESULTS["suites"] = data["suites"]
+    RESULTS["meta"] = data["meta"]
+    Path(out_path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    Path(report_path).write_text(render_report(), encoding="utf-8")
 
 
 if __name__ == "__main__":
