@@ -127,10 +127,20 @@ Persona context (DO NOT store these as memories — they are already known):
 Extract the key factual information from this message as a short memory.
 
 Rules:
-- If the message contains ANY personal information (name, relationship, location, profession, event, preference, plan, object, description), store it with importance 0.5-1.0
-- Only return importance=0 for pure greetings, filler, or questions with no self-disclosure
+- Store ANY fact that matters for understanding the user, their world, or the ongoing story:
+  identity (name, relationships, origins, appearance), world lore (places, factions, history,
+  rules, magic/tech systems), plot logic (plans, goals, promises, cause-and-effect, stakes,
+  contradictions, foreshadowing), preferences, and events.
+- Facts are personal even when phrased without "I" — "Father killed by the Shadow King"
+  is a fact about the user's world and must be stored.
+- importance 0.8-1.0: anything critical to identity, plot, or world logic
+- importance 0.5-0.8: meaningful character, relationship, or world detail
+- importance 0 ONLY for pure greetings, filler, or information-free questions
 - Be generous — when in doubt, store it
 - NEVER store persona information (it's already known)
+- keywords: lowercase, simple words or short phrases that describe the fact.
+  If the fact is about the USER's own name or identity, include the exact keyword "name".
+  (Do NOT add "name" for another character's name.)
 
 Return JSON. Example: {{"memory":"User name is Emanuel","keywords":["emanuel","name"],"importance":0.7}}
 
@@ -156,6 +166,19 @@ def _apply_decay(mem: HyperMem) -> float:
         return mem.importance * access_decay * time_decay
 
     return mem.importance
+
+
+def _is_identity_statement(text: str) -> bool:
+    """True if a message reveals the USER's own identity.
+
+    First-person patterns only ("my name is X", "I am X", "I'm called X"),
+    so another character's name ("The king was called Eldrin", "Shadow
+    King's true name is Malachar") never gets the identity tag.
+    """
+    return bool(re.search(
+        r"\bmy name\b|\bi (?:am|'m|was)\b|\bi'?m (?:called|known as)\b",
+        text, re.I,
+    ))
 
 
 # ---- Main engine ----
@@ -268,7 +291,8 @@ class HyperMEM:
                     except (TypeError, ValueError):
                         importance = 0.0
                     memory_text = parsed.get("memory", "")
-                    keywords = parsed.get("keywords", [])
+                    keywords = [str(k).strip().lower() for k in parsed.get("keywords", [])
+                                if str(k).strip()]
 
                     if memory_text and memory_text.strip():
                         # If the judge extracted a fact, store it. Importance
@@ -276,9 +300,16 @@ class HyperMEM:
                         importance = max(importance, self.config.auto_tag_threshold)
                         mem_content = memory_text if len(memory_text) > 5 and memory_text != "name" else content
                         new_keywords = keywords or _extract_keywords(content)
+                        # Deterministic identity tag: "My name is X", "I am X",
+                        # "I'm called X" in the raw message → the memory holds
+                        # the user's identity, so identity questions can find it.
+                        if (_is_identity_statement(content)
+                                and "name" not in new_keywords):
+                            new_keywords.append("name")
 
                         # Check for conflicts with existing memories
                         conflict_indices = _find_conflicts(self.state.active, new_keywords, mem_content)
+                        replaced = False
                         if conflict_indices:
                             for ci in conflict_indices:
                                 existing = self.state.active[ci]
@@ -291,9 +322,11 @@ class HyperMEM:
                                     # Replace in active
                                     self.state.active[ci] = replacement
                                     tagged = replacement
+                                    replaced = True
                                     break
-                        else:
-                            # No conflict — create new memory
+                        if not replaced:
+                            # No supersession — create new memory (coexisting
+                            # episodic events and non-conflicting facts)
                             tagged = HyperMem(
                                 id=_next_id(),
                                 content=mem_content,

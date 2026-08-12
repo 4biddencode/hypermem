@@ -14,7 +14,7 @@ from hypermem.types import (
 )
 from hypermem.engine import (
     _extract_keywords, _resolve_conflict, _find_conflicts,
-    _apply_decay, _build_judge_prompt,
+    _apply_decay, _build_judge_prompt, _is_identity_statement,
 )
 from conftest import make_llm
 
@@ -171,6 +171,59 @@ class TestContradictionResolution:
         mems = [make_mem("Went to the forest")]
         conflicts = _find_conflicts(mems, ["bob", "name"], "My name is Bob")
         assert len(conflicts) == 0
+
+
+# ---- Coexistence & identity tagging ----
+
+class TestCoexistence:
+    @pytest.mark.asyncio
+    async def test_conflicting_episodic_facts_both_stored(self):
+        """A keyword-overlap conflict on episodic memories must NOT drop the
+        new fact — the fix for silently lost memories ("Father killed by the
+        Shadow King" vanished because the bow memory shared the keyword
+        "father")."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        r1 = await hm.add_message("user", "I love hiking in the Alps")
+        r2 = await hm.add_message("user", "I hate hiking in the Alps")
+        assert r1.tagged is not None
+        assert r2.tagged is not None
+        assert len(hm.state.active) == 2
+        contents = [m.content.lower() for m in hm.state.active]
+        assert any("love" in c for c in contents)
+        assert any("hate" in c for c in contents)
+
+    @pytest.mark.asyncio
+    async def test_identity_message_tagged_with_name_keyword(self):
+        """'My name is X' / "I'm called X" facts carry the exact 'name'
+        keyword so identity questions can find them via the fallback, even
+        when the LLM recall refuses to rank."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "My name is Eldrin from Silverwood")
+        assert "name" in hm.state.active[0].keywords
+
+    @pytest.mark.asyncio
+    async def test_first_person_identity_tagged(self):
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "I'm called Eldrin, a ranger")
+        assert "name" in hm.state.active[0].keywords
+
+    @pytest.mark.asyncio
+    async def test_other_character_identity_not_tagged(self):
+        """Another character's 'true name' must NOT carry the user-identity
+        tag, so 'What's my name?' never surfaces it."""
+        assert not _is_identity_statement("Shadow King's true name is Malachar")
+        assert not _is_identity_statement("The king was called Eldrin")
+        assert not _is_identity_statement("Moonwhisper was blessed by the High Elves")
+
+    @pytest.mark.asyncio
+    async def test_identity_helper_first_person_only(self):
+        assert _is_identity_statement("My name is Eldrin, an elven ranger from Silverwood.")
+        assert _is_identity_statement("I am Eldrin")
+        assert _is_identity_statement("I'm called Eldrin")
+        assert _is_identity_statement("I'm known as Eldrin")
 
 
 # ---- Edge cases ----

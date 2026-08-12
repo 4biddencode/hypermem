@@ -339,7 +339,9 @@ Question: "{message}"
 
 Rules:
 - A memory is relevant if it contains a fact the question asks about, even if the question uses different wording.
-- "What is my name?" is answered by the memory that contains your name. "Where do I live?" by the memory with your location.
+- Identity questions ("What is my name?", "Who am I?") are answered by the memory containing the user's name.
+- Questions about the user's world, plans, or history are answered by the memory holding that fact.
+- Prefer the fact-carrying memory over a similar-sounding one.
 - Return the up to {max_results} most relevant memory indices, most relevant first, as a JSON array of numbers.
 
 Return ONLY the JSON array. Example: [3, 1]
@@ -353,7 +355,15 @@ If no memory is relevant, return []."""
             logger.debug("recall raw response: %r", result)
             indices = _extract_indices(result)
             if indices:
-                return indices[:max_results]
+                indices = indices[:max_results]
+                # Lexical evidence first (deterministic), then LLM picks
+                # (deduplicated). A small model that ranks the wrong memory
+                # cannot hide a fact the question literally names.
+                ordered = list(LLMClient._keyword_fallback(message, memories))
+                for i in indices:
+                    if i not in ordered:
+                        ordered.append(i)
+                return ordered[:max_results]
 
         return LLMClient._keyword_fallback(message, memories)
 
@@ -363,12 +373,24 @@ If no memory is relevant, return []."""
         q = set(re.findall(r"[a-z0-9]{3,}", message.lower()))
         if not q:
             return []
+        # "What's my name?" / "Who am I?" — first-person identity queries
+        # (checked on the raw text: "my"/"i" are too short for the token set).
+        # "my sister's name" is NOT about the user → excluded.
+        identity_query = (bool({"name", "called", "known"} & q)
+                          and bool(re.search(r"\b(my|me|mine|i)\b", message, re.I))
+                          and not re.search(r"\bmy \w+'s\b", message, re.I))
         scored = []
         for i, mem in enumerate(memories):
             haystack = set(re.findall(r"[a-z0-9]{3,}", mem.content.lower()))
-            haystack |= {kw.lower() for kw in (mem.keywords or [])}
+            kwset = {kw.lower() for kw in (mem.keywords or [])}
+            haystack |= kwset
             overlap = len(q & haystack)
             if overlap > 0:
-                scored.append((overlap, -mem.importance, i))
+                # Identity questions ("What's my name?") must surface the
+                # user-identity memory (tagged with the exact "name" keyword),
+                # never a lookalike ("true name of ...").
+                if identity_query and ("name" in kwset or "identity" in kwset):
+                    overlap += 5
+                scored.append((overlap, -mem.importance, -i, i))
         scored.sort(reverse=True)
-        return [i for _, _, i in scored]
+        return [i for *_, i in scored]

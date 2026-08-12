@@ -126,6 +126,34 @@ class TestKeywordFallback:
         ]
         assert LLMClient._keyword_fallback("quantum physics trivia", mems) == []
 
+    def test_identity_boost_picks_user_identity(self):
+        """'What's my name?' must surface the identity-tagged memory (exact
+        'name' keyword), not the lookalike 'true name is Malachar' memory."""
+        mems = [
+            HyperMem(id="1", content="Eldrin is an elven ranger from Silverwood.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["eldrin", "name"], importance=0.8, source="auto"),
+            HyperMem(id="2", content="Shadow King's true name is Malachar.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["shadow", "king", "true name", "malachar"],
+                     importance=0.8, source="auto"),
+        ]
+        idx = LLMClient._keyword_fallback("What's my name?", mems)
+        assert idx[0] == 0
+
+    def test_identity_boost_not_needed_for_non_identity_query(self):
+        mems = [
+            HyperMem(id="1", content="Eldrin is an elven ranger from Silverwood.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["eldrin", "name"], importance=0.8, source="auto"),
+            HyperMem(id="2", content="Shadow King's true name is Malachar.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["shadow", "king", "true name", "malachar"],
+                     importance=0.8, source="auto"),
+        ]
+        idx = LLMClient._keyword_fallback("What's the Shadow King's name?", mems)
+        assert idx[0] == 1
+
 
 # ---- HTTP protocol level ----
 

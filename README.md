@@ -111,14 +111,22 @@ into long-term memory automatically.
 ## How It Works
 
 1. **Judge** — when you add a message, the LLM answers: "is there a fact here?"
+   It stores **anything important** — identity, relationships, world lore, plot
+   logic, plans, cause-and-effect, preferences, events — not just names. Facts
+   phrased without "I" ("Father killed by the Shadow King") are still captured.
    Every extracted fact is stored; its importance field ranks it (floored at
-   the tagging threshold, so extraction never silently drops facts).
+   the tagging threshold, so extraction never silently drops facts). Identity
+   messages get a deterministic `name` tag so "What's my name?" can always
+   find them.
 2. **Store** — facts go into `active` memories with keywords + importance.
    Contradictions supersede old static/temporal memories; episodic events
-   coexist. Oversized history is archived by decay-adjusted importance.
+   coexist (a shared keyword never swallows a new fact). Oversized history is
+   archived by decay-adjusted importance.
 3. **Recall** — for each message/question, the LLM ranks candidate memories
-   (top-3, JSON output). If the model returns nothing, a keyword-overlap
-   fallback still surfaces anything that lexically matches.
+   (top-3, JSON output), merged lexical-first with deterministic keyword
+   matches, so a model ranking hiccup can't hide a fact the question literally
+   names. Identity questions boost the user-identity memory — never a lookalike
+   like another character's "true name".
 4. **Inject** — recalled memories + recent chat + worldIDA are assembled into
    the context prompt.
 
