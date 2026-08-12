@@ -17,4 +17,5 @@ htmlcov/
 # HyperMEM runtime data
 .hypermem_data/
 benchmarks/benchmark_results*.json
+benchmarks/benchmark_report*.md
 benchmarks/benchmark_run_real.log
