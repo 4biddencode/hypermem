@@ -166,20 +166,36 @@ mistakes its own identity for conversation facts.
 
 ## Benchmarks
 
-The suite runs against a **real model** — no mock modes:
+The suite runs against a **real model** — no mock modes. `full_suite.py` is
+the official harness: 8 capability suites, repeated across seeds (mean ± std)
+and across models, with a markdown leaderboard report. The classic scripts
+remain for single-issue runs.
 
 ```bash
-python benchmarks/run_benchmarks.py              # full: up to 10K messages
-python benchmarks/run_benchmarks.py --quick      # ~minutes: 100/500/1K
+# Official harness
+python benchmarks/full_suite.py --quick                      # smoke, ~15 min
+python benchmarks/full_suite.py --full                       # everything, hours
+python benchmarks/full_suite.py --models qwen2.5:7b,gemma3:12b --seeds 3
+python benchmarks/full_suite.py --suites recall,answer --scales 100,1000,5000
+
+# Classic suites
+python benchmarks/run_benchmarks.py                          # full: up to 10K messages
+python benchmarks/run_benchmarks.py --quick                  # ~minutes: 100/500/1K
 python benchmarks/run_benchmarks.py --scales 100,1000,5000 --model gemma3:12b
+
+# Mode comparison (normal vs hypermem vs hypermem+worldIDA)
+python benchmarks/compare_modes.py --quick
+python benchmarks/compare_modes.py --scales 100,1000,5000,10000
+
+# Per-plant-fact recall diagnostics
+python benchmarks/diag_recall.py
 ```
 
-Metrics: recall accuracy vs. distance, recall with distractors, per-call
-latency, storage growth (conversation-bound and per-memory), worldIDA drift
-over 100 turns. Results land in `benchmarks/benchmark_results.json`.
-
-`benchmarks/diag_recall.py` prints every planted fact vs. what recall
-returns — the first tool to reach for when troubleshooting.
+Suites: recall vs. distance, end-to-end answer accuracy across injection
+modes (none / hypermem / +worldIDA), distractor resistance, contradiction
+supersession, paraphrase robustness, p50/p95 latency, storage growth, and
+worldIDA drift over 100 turns. Results land in
+`benchmarks/benchmark_results_full.json` + `benchmark_report_full.md`.
 
 ## Repo Layout
 

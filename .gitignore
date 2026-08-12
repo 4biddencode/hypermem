@@ -12,6 +12,7 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+*.log
 
 # HyperMEM runtime data
 .hypermem_data/
