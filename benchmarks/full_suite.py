@@ -37,6 +37,7 @@ import random
 import statistics
 import sys
 import time
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -321,12 +322,14 @@ def render_report() -> str:
             continue
         lines.append(f"## {suite}")
         lines.append("")
-        lines.append("| metric | " + " | ".join(RESULTS["meta"]["models"]) + " |")
-        lines.append("|--------|" + "--------|" * len(RESULTS["meta"]["models"]))
         metrics = sorted(RESULTS["suites"][suite].keys())
+        by_model = {m: [mod for mod in RESULTS["meta"]["models"] if mod in RESULTS["suites"][suite][m]] for m in metrics}
+        all_models = sorted({mod for mods in by_model.values() for mod in mods})
+        lines.append("| metric | " + " | ".join(all_models) + " |")
+        lines.append("|--------|" + "--------|" * len(all_models))
         for m in metrics:
             cells = []
-            for model in RESULTS["meta"]["models"]:
+            for model in all_models:
                 agg = RESULTS["suites"][suite][m][model]
                 cells.append(f"{agg['mean']} ± {agg['std']}")
             lines.append(f"| {m} | " + " | ".join(cells) + " |")
@@ -338,6 +341,8 @@ def build_results(runs: list[dict]) -> dict:
     """Aggregate per-(suite, metric, model) mean/std from raw runs."""
     suites: dict = {}
     for r in runs:
+        if "result" not in r:
+            continue
         for metric, val in r["result"].items():
             suites.setdefault(r["suite"], {}).setdefault(metric, {}).setdefault(r["model"], []).append(val)
     out = {}
@@ -396,7 +401,7 @@ async def main():
         runs = saved.get("runs", [])
         print(f"Resuming: {len(runs)} runs already completed")
 
-    done = {(r["model"], r["suite"], r["seed"]) for r in runs}
+    done = {(r["model"], r["suite"], r["seed"]) for r in runs if "result" in r}
     total_runs = len(models) * len(suites) * seeds
     print("=" * 64)
     print("HyperMEM — Full Benchmark")
@@ -408,20 +413,30 @@ async def main():
     print(f"Endpoint:{args.endpoint}")
 
     start_all = time.perf_counter()
-    for model in models:
-        print(f"\n### model: {model}")
-        for suite in suites:
-            for seed in range(1, seeds + 1):
-                if (model, suite, seed) in done:
-                    print(f"  [skip] {suite} seed={seed} (already done)")
-                    continue
-                t0 = time.perf_counter()
-                print(f"  {suite} seed={seed} ...", flush=True)
-                r = await run_suite(suite, model, args.endpoint, seed, scales, turns)
-                runs.append({"model": model, "suite": suite, "seed": seed, "result": r})
-                print(f"      done in {time.perf_counter() - t0:.0f}s", flush=True)
-                _checkpoint(args.out, args.report, runs, models, suites, seeds,
-                            scales, turns, args.endpoint, start_all)
+    try:
+        for model in models:
+            print(f"\n### model: {model}")
+            for suite in suites:
+                for seed in range(1, seeds + 1):
+                    if (model, suite, seed) in done:
+                        print(f"  [skip] {suite} seed={seed} (already done)")
+                        continue
+                    t0 = time.perf_counter()
+                    print(f"  {suite} seed={seed} ...", flush=True)
+                    try:
+                        r = await run_suite(suite, model, args.endpoint, seed, scales, turns)
+                        runs.append({"model": model, "suite": suite, "seed": seed, "result": r})
+                        print(f"      done in {time.perf_counter() - t0:.0f}s", flush=True)
+                    except Exception as e:
+                        traceback.print_exc()
+                        runs.append({"model": model, "suite": suite, "seed": seed, "error": str(e)})
+                        print(f"      FAILED: {e} — recorded, continuing", flush=True)
+                    _checkpoint(args.out, args.report, runs, models, suites, seeds,
+                                scales, turns, args.endpoint, start_all)
+    except KeyboardInterrupt:
+        _checkpoint(args.out, args.report, runs, models, suites, seeds,
+                    scales, turns, args.endpoint, start_all)
+        print("\nInterrupted — progress saved. Rerun with --resume to continue.")
 
     _checkpoint(args.out, args.report, runs, models, suites, seeds,
                 scales, turns, args.endpoint, start_all)
@@ -454,7 +469,10 @@ def _checkpoint(out_path, report_path, runs, models, suites, seeds, scales,
     RESULTS["suites"] = data["suites"]
     RESULTS["meta"] = data["meta"]
     Path(out_path).write_text(json.dumps(data, indent=2), encoding="utf-8")
-    Path(report_path).write_text(render_report(), encoding="utf-8")
+    try:
+        Path(report_path).write_text(render_report(), encoding="utf-8")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

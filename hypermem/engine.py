@@ -320,7 +320,11 @@ class HyperMEM:
         return AddMessageResult(self.state, tagged, recalled)
 
     def _parse_judge_result(self, raw: str) -> Optional[dict]:
-        """Parse LLM judge response, handling markdown fences."""
+        """Parse LLM judge response, handling markdown fences.
+
+        Returns None if the response is not a JSON object (e.g. a list or
+        malformed output) — callers treat None as "nothing to store".
+        """
         import json
         try:
             cleaned = raw.strip()
@@ -328,7 +332,8 @@ class HyperMEM:
                 cleaned = cleaned.split("```json")[1].split("```")[0].strip()
             elif "```" in cleaned:
                 cleaned = cleaned.split("```")[1].split("```")[0].strip()
-            return json.loads(cleaned)
+            parsed = json.loads(cleaned)
+            return parsed if isinstance(parsed, dict) else None
         except (json.JSONDecodeError, IndexError):
             return None
 
