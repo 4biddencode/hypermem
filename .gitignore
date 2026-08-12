@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# HyperMEM runtime data
+.hypermem_data/
+benchmarks/benchmark_results*.json
+benchmarks/benchmark_run_real.log
