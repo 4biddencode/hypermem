@@ -562,6 +562,30 @@ class TestPersistence:
         assert restored.conversation_id == "test"
         assert restored.total_messages == 42
 
+    def test_state_from_dict_tolerant_of_stale_json(self):
+        """A memory missing fields / with unknown keys / bad memory_type must
+        load without crashing (tolerant of pre-rework or hand-edited JSON)."""
+        # Missing required access_count + an unknown extra field.
+        stale = {
+            "conversation_id": "c1",
+            "active": [{
+                "id": "m1", "content": "hello", "created_at": 1.0,
+                "last_accessed_at": 1.0, "keywords": [], "importance": 0.8,
+                "source": "user", "memory_type": "static",
+                "not_a_real_field": "x",
+            }],
+            "archive": [], "recent_messages": [], "total_messages": 1,
+        }
+        s = state_from_dict(stale)
+        assert len(s.active) == 1
+        assert s.active[0].access_count == 0  # defaulted
+        assert s.active[0].memory_type == MemoryType.STATIC
+
+        # Invalid memory_type falls back to EPISODIC.
+        stale["active"][0]["memory_type"] = "BOGUS"
+        s2 = state_from_dict(stale)
+        assert s2.active[0].memory_type == MemoryType.EPISODIC
+
     def test_persona_persists(self, tmp_path):
         hm = make_hm()
         hm.set_persona(Persona(name="Elena", description="Rogue"))

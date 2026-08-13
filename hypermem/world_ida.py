@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
+from .llm import extract_json_object
+
 logger = logging.getLogger("hypermem.world_ida")
 
 
@@ -193,17 +195,13 @@ async def update_world_ida(
             update_world_ida._failure_count = failure_count + 1
             return previous_ida or WorldIDA()
 
-        # Strip markdown fences if present
-        cleaned = result.strip()
-        if "```json" in cleaned:
-            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-        elif "```" in cleaned:
-            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+        # Parse leniently, the same way the judge and recall paths do, so a
+        # model that wraps JSON in single quotes or trailing commas doesn't
+        # silently fail to update the world state.
+        parsed = extract_json_object(result)
 
-        parsed = json.loads(cleaned)
-
-        if not _validate_ida(parsed):
-            logger.warning(f"worldIDA: validation failed, raw: {cleaned[:200]}")
+        if parsed is None or not _validate_ida(parsed):
+            logger.warning(f"worldIDA: validation failed, raw: {result[:200]}")
             update_world_ida._failure_count = failure_count + 1
             return previous_ida or WorldIDA()
 

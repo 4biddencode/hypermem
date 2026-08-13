@@ -215,6 +215,19 @@ async def test_malformed_llm_fallback():
     assert result.meta.turn_count_in_scene == prev.meta.turn_count_in_scene
 
 
+@pytest.mark.asyncio
+async def test_single_quoted_json_still_updates():
+    """A model that emits single-quoted JSON (a common failure mode) must
+    still update the world state, matching the judge/recall lenient parsing."""
+    prev = make_ida()
+    llm = StubLLM("{'meta': {'scene_changed': True, 'turn_count_in_scene': 9}}")
+
+    result = await update_world_ida(prev, "Hello.", "Hi there!", llm_complete=llm)
+
+    assert result.meta.turn_count_in_scene == 9
+    assert result.scene.location == prev.scene.location  # unchanged field carried over
+
+
 # ---- First-turn init ----
 
 @pytest.mark.asyncio

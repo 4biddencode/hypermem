@@ -124,27 +124,62 @@ def state_to_dict(state: HyperMemState) -> dict:
     return result
 
 
-def state_from_dict(data: dict) -> HyperMemState:
-    """Deserialize state from dict."""
-    active = []
-    for m in data.get("active", []):
-        m["memory_type"] = MemoryType(m.get("memory_type", "episodic"))
-        active.append(HyperMem(**m))
+def _build_from_fields(cls, data: dict, defaults: dict) -> object:
+    """Build a dataclass from a dict, tolerating stale or hand-edited JSON.
 
-    archive = []
-    for m in data.get("archive", []):
-        m["memory_type"] = MemoryType(m.get("memory_type", "episodic"))
-        archive.append(HyperMem(**m))
+    Only known fields are passed through; unknown keys are ignored and
+    missing ones fall back to the dataclass default.
+    """
+    from dataclasses import fields
+    known = {f.name for f in fields(cls)}
+    kwargs = {k: v for k, v in data.items() if k in known}
+    for k, v in defaults.items():
+        kwargs.setdefault(k, v)
+    return cls(**kwargs)
+
+
+def state_from_dict(data: dict) -> HyperMemState:
+    """Deserialize state from dict.
+
+    Tolerant of pre-rework or hand-edited JSON: unknown keys are ignored and
+    missing fields fall back to defaults, so a memory saved by a different
+    version never crashes a load.
+    """
+    mem_defaults = {
+        "id": "unknown", "content": "", "created_at": 0.0,
+        "last_accessed_at": 0.0, "access_count": 0, "keywords": [],
+        "importance": 0.0, "source": "user",
+    }
+
+    def _mem(m: dict) -> HyperMem:
+        mt = m.get("memory_type", "episodic")
+        if not isinstance(mt, MemoryType):
+            try:
+                mt = MemoryType(str(mt).lower())
+            except ValueError:
+                mt = MemoryType.EPISODIC
+        m = dict(m)
+        m["memory_type"] = mt
+        return _build_from_fields(HyperMem, m, mem_defaults)
+
+    active = [_mem(m) for m in data.get("active", []) if isinstance(m, dict)]
+    archive = [_mem(m) for m in data.get("archive", []) if isinstance(m, dict)]
 
     persona = None
-    if data.get("persona"):
-        persona = Persona(**data["persona"])
+    if isinstance(data.get("persona"), dict):
+        persona = _build_from_fields(Persona, data["persona"], {})
 
     return HyperMemState(
-        conversation_id=data["conversation_id"],
+        conversation_id=data.get("conversation_id", ""),
         active=active,
         archive=archive,
-        recent_messages=[Message(**m) for m in data.get("recent_messages", [])],
+        recent_messages=[
+            _build_from_fields(Message, m, {
+                "id": "", "role": "user", "content": "", "timestamp": 0.0,
+            })
+            for m in data.get("recent_messages", [])
+            if isinstance(m, dict)
+        ],
         total_messages=data.get("total_messages", 0),
         persona=persona,
     )
