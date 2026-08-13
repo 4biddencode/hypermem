@@ -1,12 +1,11 @@
-"""HyperMEM — EmbeddingClient (optional semantic recall).
+"""EmbeddingClient: optional semantic recall.
 
-Provides a single async interface for embedding text via Ollama's local
-embedding models (e.g. ``nomic-embed-text``) or OpenAI's embedding API.
-The provider is resolved from config (or the LLM provider when set to
-"auto") and every call degrades gracefully: any failure marks the client
-unavailable and returns ``None``, so a missing/misconfigured embedding
-model never breaks the engine — recall simply falls back to the
-LLM+lexical path.
+One async interface for embedding text via Ollama's local embedding models
+(``nomic-embed-text``) or OpenAI's embedding API. The provider is resolved
+from config (or the LLM provider when set to "auto"). Every call degrades
+gracefully: a failure marks the client unavailable and returns ``None``, so
+a missing or misconfigured embedding model never breaks the engine — recall
+falls back to the LLM+lexical path.
 """
 
 import logging
@@ -45,9 +44,9 @@ def resolve_embedding_provider(provider: str, llm_provider: Optional[str],
                                llm_endpoint: Optional[str]) -> str:
     """Map an explicit/auto embedding provider to a concrete one.
 
-    ``auto`` follows the LLM provider: ollama → local Ollama embeddings,
-    openai → OpenAI embeddings, anything else (anthropic has no embedding
-    API) → "none".
+    ``auto`` follows the LLM provider: ollama and openai map to their own
+    embedding APIs; anything else (anthropic has no embedding API) maps to
+    "none".
     """
     if provider and provider != "auto":
         return provider

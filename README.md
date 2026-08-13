@@ -1,4 +1,4 @@
-# HyperMEM — AI Memory That Never Forgets
+# HyperMEM - AI Memory That Never Forgets
 
 [![CI](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg)](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pypi-1.0.0-blue)](https://pypi.org/project/hypermem/)

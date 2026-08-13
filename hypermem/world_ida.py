@@ -15,9 +15,7 @@ from typing import Optional
 logger = logging.getLogger("hypermem.world_ida")
 
 
-# ---------------------------------------------------------------------------
 # 1. SCHEMA
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Scene:
@@ -68,9 +66,7 @@ class WorldIDA:
     meta: Meta = field(default_factory=Meta)
 
 
-# ---------------------------------------------------------------------------
 # 2. UPDATE FUNCTION
-# ---------------------------------------------------------------------------
 
 def _build_update_prompt(previous_ida: Optional[WorldIDA],
                          last_user_message: str,
@@ -231,16 +227,14 @@ async def update_world_ida(
         logger.warning(f"worldIDA: parse error: {e}")
         update_world_ida._failure_count = failure_count + 1
 
-        # 3+ consecutive failures → log error
+        # After 3+ consecutive failures, log an error
         if update_world_ida._failure_count >= 3:
             logger.error("worldIDA: 3+ consecutive failures, returning minimal state")
 
         return previous_ida or WorldIDA()
 
 
-# ---------------------------------------------------------------------------
 # 3. CONTEXT INJECTION
-# ---------------------------------------------------------------------------
 
 def world_ida_to_context_string(ida: WorldIDA) -> str:
     """
@@ -304,9 +298,7 @@ def world_ida_to_context_string(ida: WorldIDA) -> str:
     return " ".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# 4. SCENE TRANSITION → LONG-TERM MEMORY SNAPSHOT
-# ---------------------------------------------------------------------------
+# 4. Scene transition -> long-term memory snapshot
 
 def scene_transition_summary(old_ida: WorldIDA) -> str:
     """Build a summary of the old scene for storage in long-term memory."""
@@ -322,9 +314,7 @@ def scene_transition_summary(old_ida: WorldIDA) -> str:
     return f"Scene ended: {', '.join(parts)}." if parts else "Scene ended."
 
 
-# ---------------------------------------------------------------------------
 # 5. STORAGE (in-memory per session, persist-ready)
-# ---------------------------------------------------------------------------
 
 class WorldIDAStore:
     """In-memory store for worldIDA objects, one per session."""

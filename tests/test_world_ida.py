@@ -86,7 +86,7 @@ async def test_single_field_mood_change():
 
 @pytest.mark.asyncio
 async def test_scene_change_detection():
-    """Location shifts → scene_changed=true, turn_count resets."""
+    """A location shift sets scene_changed=true and resets turn_count."""
     prev = make_ida()
     response = json.dumps({
         "scene": {"location": "forest", "time_of_day": "dawn",
@@ -110,7 +110,7 @@ async def test_scene_change_detection():
 
 @pytest.mark.asyncio
 async def test_physical_state_continuity():
-    """Sitting → should not show standing without justification."""
+    """Sitting should not become standing without justification."""
     prev = make_ida()
     # LLM returns same state (no change mentioned)
     response = json.dumps({
@@ -204,7 +204,7 @@ async def test_partial_update_merges_over_previous():
 
 @pytest.mark.asyncio
 async def test_malformed_llm_fallback():
-    """Malformed JSON → return previous_ida unchanged, no crash."""
+    """Malformed JSON returns previous_ida unchanged, without crashing."""
     prev = make_ida()
     llm = StubLLM("this is not json")
 
@@ -219,7 +219,7 @@ async def test_malformed_llm_fallback():
 
 @pytest.mark.asyncio
 async def test_first_turn_init():
-    """previous_ida=None → initialize from exchange."""
+    """With previous_ida=None, initialize from the exchange."""
     response = json.dumps({
         "scene": {"location": "coffee shop", "time_of_day": "morning", "ongoing_action": "ordering coffee"},
         "user": {"physical_state": "standing at the counter"},

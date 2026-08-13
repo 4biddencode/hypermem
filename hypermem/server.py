@@ -37,9 +37,7 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 
-# ---------------------------------------------------------------------------
 # Session store — in-memory cache + JSON persistence on disk
-# ---------------------------------------------------------------------------
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -50,7 +48,7 @@ class SessionStore:
     def __init__(self, config: HyperMemConfig, data_dir: Path, llm=None):
         self._config = config
         self._data_dir = data_dir
-        self._llm = llm  # shared LLM client or None → one per session
+        self._llm = llm  # shared LLM client, or None to make one per session
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, HyperMEM] = {}
         self._lock = threading.Lock()
@@ -122,9 +120,7 @@ class SessionStore:
         self._write(session_id, hm)
 
 
-# ---------------------------------------------------------------------------
 # Serializers
-# ---------------------------------------------------------------------------
 
 def _mem_to_dict(mem) -> dict:
     d = asdict(mem)
@@ -151,9 +147,7 @@ def _summary(hm: HyperMEM) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
 # Request models
-# ---------------------------------------------------------------------------
 
 class MessageIn(BaseModel):
     role: str = Field(default="user", pattern="^(user|assistant|system)$")
@@ -180,9 +174,7 @@ class WorldIDAIn(BaseModel):
     persona_context: Optional[str] = None
 
 
-# ---------------------------------------------------------------------------
 # App factory
-# ---------------------------------------------------------------------------
 
 def create_app(config: Optional[HyperMemConfig] = None,
                data_dir: Optional[Path] = None, llm=None) -> FastAPI:
@@ -356,9 +348,7 @@ def create_app(config: Optional[HyperMemConfig] = None,
     return app
 
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
 
 def _build_config(args) -> HyperMemConfig:
     return HyperMemConfig(

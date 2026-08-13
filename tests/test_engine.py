@@ -347,8 +347,8 @@ class TestIngestion:
 
     @pytest.mark.asyncio
     async def test_embedding_near_duplicate_deduped(self):
-        """Same fact, slightly different wording → one memory when embeddings
-        are enabled (semantic dedup)."""
+        """Same fact, slightly different wording, becomes one memory when
+        embeddings are enabled (semantic dedup)."""
         client, _ = make_llm()
         hm = HyperMEM(HyperMemConfig(embedding_provider="ollama"), llm=client)
         await hm.add_message("user", "I love pizza and I love pasta")
@@ -492,7 +492,7 @@ class TestLifecycle:
                       llm=client)
         await hm.add_message("user", "I journeyed to the black mountain")
         await hm.add_message("user", "I climbed the black mountain")
-        # Only 2 messages so far, interval is 10 → no consolidation yet
+        # Only 2 messages so far, interval is 10, so no consolidation yet
         assert len(hm.state.archive) == 0
         assert len(hm.state.active) == 2
 

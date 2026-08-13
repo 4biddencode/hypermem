@@ -124,8 +124,9 @@ class OllamaStub:
 
     @staticmethod
     def _hash_vec(text: str) -> list:
-        """Deterministic bag-of-words vector: same token set → same vector,
-        so cosine similarity behaves like a rough semantic overlap."""
+        """Deterministic bag-of-words vector: the same token set yields the
+        same vector, so cosine similarity behaves like a rough semantic
+        overlap."""
         vec = [0.0] * 64
         for tok in _tokens(text):
             vec[zlib.crc32(tok.encode("utf-8")) % 64] += 1.0

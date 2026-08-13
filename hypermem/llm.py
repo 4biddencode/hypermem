@@ -146,8 +146,8 @@ def _balanced_blocks(text: str) -> list[str]:
 def _lenient_load(text: str):
     """Parse an LLM JSON-ish object, tolerating Python-style quirks.
 
-    Tries (in order): strict json → trailing-comma/True/None fixups →
-    ast.literal_eval (handles single quotes, None/True/False, etc.).
+    Tries, in order: strict json, then trailing-comma/True/None fixups,
+    then ast.literal_eval (handles single quotes, None/True/False, etc.).
     """
     import ast
     try:

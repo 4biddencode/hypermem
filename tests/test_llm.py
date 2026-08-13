@@ -43,7 +43,7 @@ class TestExtractIndices:
 class TestJudgeFloor:
     @pytest.mark.asyncio
     async def test_low_importance_still_stored(self):
-        """Judge returns importance below threshold but a real fact → stored."""
+        """A real fact below the importance threshold is still stored."""
         client, _ = make_llm()
         hm = HyperMEM(HyperMemConfig(auto_tag_threshold=0.7), llm=client)
 
@@ -69,7 +69,7 @@ class TestRecallPipeline:
     async def test_recall_returns_ranked_list(self):
         """LLM may return several indices; recall honors the order."""
         client, _ = make_llm(recall_response=lambda q, mems: "[2, 1]")
-        # Embeddings off → forces the LLM+lexical path these overrides test.
+        # Embeddings off, which forces the LLM+lexical path these overrides test.
         hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "fact one about mountains")
         await hm.add_message("user", "fact two about oceans")
@@ -79,7 +79,7 @@ class TestRecallPipeline:
 
     @pytest.mark.asyncio
     async def test_empty_list_uses_keyword_fallback(self):
-        """LLM returns [] but a memory shares keywords → still recalled."""
+        """When the LLM returns [], a memory sharing keywords is still recalled."""
         client, _ = make_llm(recall_response=lambda q, mems: "[]")
         hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "I have a dog named Rex and he lives in Vienna")

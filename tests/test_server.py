@@ -38,7 +38,7 @@ async def test_session_lifecycle(client):
     assert data["session_id"] == "rp1"
     assert data["total_messages"] == 0
 
-    # Duplicate → 409
+    # Duplicate gives 409
     resp = await client.post("/sessions", json={"session_id": "rp1"})
     assert resp.status_code == 409
 
@@ -46,7 +46,7 @@ async def test_session_lifecycle(client):
     resp = await client.get("/sessions")
     assert [s["conversation_id"] for s in resp.json()["sessions"]] == ["rp1"]
 
-    # Missing → 404
+    # Missing gives 404
     resp = await client.get("/sessions/nope")
     assert resp.status_code == 404
 
@@ -77,7 +77,7 @@ async def test_add_message_and_recall(client):
     assert len(data["relevant"]) == 1
     assert "Emanuel" in data["relevant"][0]["content"]
 
-    # Recall without query → 400
+    # Recall without a query gives 400
     resp = await client.get("/sessions/s1/recall")
     assert resp.status_code == 400
 
@@ -187,7 +187,7 @@ async def test_memory_provenance(client):
     assert data["stored_from"] == "My name is Emanuel and I love hiking"
     assert "embedding" not in data  # internal vector never leaks
 
-    # With a query → the live hybrid score breakdown
+    # With a query, the live hybrid score breakdown
     resp = await client.get(f"/sessions/s7/memories/{mid}",
                             params={"query": "What's my name?"})
     ranking = resp.json()["ranking"]
@@ -195,7 +195,7 @@ async def test_memory_provenance(client):
                             "identity_boost", "echo_penalty", "total"}
     assert ranking["identity_boost"] == 1.5  # identity query boosts it
 
-    # Unknown memory → 404
+    # Unknown memory gives 404
     assert (await client.get("/sessions/s7/memories/nope")).status_code == 404
 
 

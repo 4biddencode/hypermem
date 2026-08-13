@@ -54,8 +54,8 @@ def _smart_recall(question: str, mems: list[str]) -> str:
 
     The demo's recall works against a real embedding model, which understands
     contractions and paraphrase ("What's my name?" -> "My name is Eldrin…")
-    and disambiguates genuinely ambiguous queries ("What does the crown do?"
-    -> the crown's *function*, not the quest artifact also called a crown).
+    and disambiguates queries that collide ("What does the crown do?" -> the
+    crown's *function*, not the quest artifact also called a crown).
     The stub's naive bag-of-words embedding can't do either, so this stands in
     for the model: return the memory that contains the query's target keyword
     (picked by best token overlap), or "[]" when nothing matches.
@@ -89,9 +89,9 @@ def _demo_recall(question: str, mems: list[str]) -> str:
 
 
 def make_hm(**kwargs) -> HyperMEM:
-    # recall_use_llm=True so the smarter recall stub disambiguates genuinely
-    # ambiguous queries (two facts both mention "crown"), the way a real model
-    # would. The stub's naive bag-of-words embedding alone can't.
+    # recall_use_llm=True so the smarter recall stub disambiguates ambiguous
+    # queries (two facts both mention "crown"), the way a real model would.
+    # The stub's naive bag-of-words embedding alone can't.
     kwargs.setdefault("recall_use_llm", True)
     client, _ = make_llm(recall_response=_demo_recall)
     return HyperMEM(HyperMemConfig(**kwargs), llm=client)

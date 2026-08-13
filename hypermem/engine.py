@@ -64,12 +64,12 @@ def _resolve_conflict(existing: HyperMem, new_content: str,
                       new_keywords: Optional[list] = None) -> tuple[bool, Optional[HyperMem]]:
     """Decide whether a new fact supersedes an existing memory.
 
-    Supersession is deliberately conservative — only a *correction* of an
-    ongoing attribute replaces the old fact. New episodic events always
-    coexist, and a shared keyword alone never drops a memory (that was the
-    "silently lost facts" bug). A correction only wins when the message
-    carries an explicit correction cue ("actually", "changed", "instead", …)
-    AND the new fact's keywords genuinely overlap the old memory.
+    Supersession is conservative: only a *correction* of an ongoing attribute
+    replaces the old fact. New episodic events always coexist, and a shared
+    keyword alone never drops a memory (that was the "silently lost facts"
+    bug). A correction only wins when the message carries an explicit
+    correction cue ("actually", "changed", "instead", …) AND the new fact's
+    keywords overlap the old memory.
 
     Args:
         existing: The currently stored memory.
@@ -81,8 +81,8 @@ def _resolve_conflict(existing: HyperMem, new_content: str,
 
     Returns:
         (should_replace, replacement_memory):
-        - (True, new_mem) → existing should be superseded
-        - (False, None) → append both (they coexist)
+        - (True, new_mem) means existing should be superseded
+        - (False, None) means both coexist
     """
     new_keywords = new_keywords or []
     # Only an attribute change (static/temporal) can supersede; an old
@@ -184,7 +184,7 @@ Example: {{"has_fact":true,"importance":0.8,"memory_type":"static","subject":"va
 ENGLISH ONLY."""
 
 
-# ---- Consolidation (episodic → semantic, MemGPT-style) ----
+# Consolidation: episodic events -> one durable knowledge memory (MemGPT-style)
 
 def _build_consolidation_prompt(subject: str, memories: list[HyperMem]) -> str:
     """Prompt the LLM to fuse several episodic events about one subject into
@@ -283,7 +283,7 @@ class HyperMEM:
         )
         from .embeddings import EmbeddingClient
         # Reuse the LLM's injected transport so tests can serve embeddings
-        # through the same stub (production passes transport=None → real HTTP).
+        # through the same stub (production passes transport=None -> real HTTP).
         self._embedder = EmbeddingClient(
             provider=self.config.embedding_provider,
             model=self.config.embedding_model,
@@ -396,8 +396,8 @@ class HyperMEM:
                     subject = str(parsed.get("subject", "")).strip()
 
                     # Deterministic identity tag: "My name is X", "I am X",
-                    # "I'm called X" in the raw message → the memory holds the
-                    # user's identity, so identity questions can find it.
+                    # "I'm called X" in the raw message means the memory holds
+                    # the user's identity, so identity questions can find it.
                     if _is_identity_statement(content) and "name" not in keywords:
                         keywords.append("name")
                     if not keywords:
@@ -470,7 +470,7 @@ class HyperMEM:
                 self.state.archive.append(mem)
                 self.state.active.remove(mem)
 
-        # 4. Episodic → semantic consolidation (throttled, off by threshold 0)
+        # 4. Consolidation: episodic events -> durable knowledge (throttled)
         await self._maybe_consolidate()
 
         return AddMessageResult(self.state, tagged, recalled)
@@ -489,7 +489,7 @@ class HyperMEM:
 
     def _find_duplicate(self, content: str,
                         embedding: Optional[list]) -> Optional[HyperMem]:
-        """Find an active memory that is effectively the same fact.
+        """Find an active memory that is the same fact.
 
         Matches on exact verbatim content first, then on embedding
         similarity when vectors are available (same fact, different wording).
@@ -508,7 +508,7 @@ class HyperMEM:
     async def _maybe_consolidate(self) -> None:
         """Fuse a subject's oldest episodic memories into one knowledge memory.
 
-        MemGPT-style episodic → semantic: once a subject accumulates at least
+        MemGPT-style: once a subject accumulates at least
         ``consolidation_threshold`` events, the oldest are LLM-summarized into
         a single STATIC memory (``consolidated_from`` lists the originals) and
         the originals are archived — excluded from recall, exactly like a
@@ -629,10 +629,10 @@ class HyperMEM:
     async def _rank_memories(self, query: str) -> list[HyperMem]:
         """Rank the recall pool for a query, best first.
 
-        With embeddings available → hybrid score (cosine + lexical overlap +
-        importance + recency) plus a deterministic identity boost — no
-        per-recall LLM rank call unless ``recall_use_llm`` asks for it.
-        Without embeddings → the proven LLM+lexical path (unchanged).
+        With embeddings available, the score is a hybrid (cosine + lexical
+        overlap + importance + recency) plus a deterministic identity boost —
+        no per-recall LLM rank call unless ``recall_use_llm`` asks for it.
+        Without embeddings, it uses the proven LLM+lexical path (unchanged).
         """
         pool = self._recall_candidates()
         if not pool:
@@ -672,9 +672,9 @@ class HyperMEM:
         # similar-sounding decoy ("There is a different bow called Starfall"
         # vs the real bow). Ask the LLM to adjudicate the near-tied band:
         # its picks get a boost, and the near-tied candidates it rejected are
-        # excluded from this recall. Fires only when the scores are genuinely
-        # close (``recall_ambiguity_gap``), so the embedding-fast path is
-        # untouched for unambiguous queries.
+        # excluded from this recall. Fires only when the scores are close
+        # (``recall_ambiguity_gap``), so the embedding-fast path is untouched
+        # for unambiguous queries.
         gap = self.config.recall_ambiguity_gap
         if (len(scored) >= 2 and gap > 0
                 and scored[0][0] - scored[1][0] < gap):
