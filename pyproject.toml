@@ -7,7 +7,7 @@ name = "hypermem"
 version = "1.0.0"
 description = "AI memory system that never forgets what matters"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "HyperMEM Source-Available License" }
 authors = [
     { name = "4biddencode", email = "4biddencode@users.noreply.github.com" },
 ]
