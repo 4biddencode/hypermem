@@ -5,13 +5,15 @@ so the *real* LLMClient (prompt building, JSON parsing, retries) and the
 whole engine pipeline run against it — no live model needed in CI.
 
 Limited to the prompt shapes HyperMEM itself generates:
-- judge prompts        -> {"memory", "keywords", "importance"}
+- judge prompts        -> {"has_fact", "importance", "memory_type", "subject", "keywords"}
 - recall prompts       -> "[n, ...]" index list (or "[]")
 - worldIDA prompts     -> scene/user/character/relationship/meta JSON
+- /api/embeddings      -> deterministic bag-of-words vector
 """
 
 import json
 import re
+import zlib
 import httpx
 import pytest
 
@@ -20,9 +22,13 @@ from hypermem.llm import LLMClient
 JUDGE_MARKERS = [
     "Extract the key factual information",
     "Is there a specific fact to remember",
+    "Decide whether this message contains a fact worth remembering",
 ]
 RECALL_MARKERS = [
     "find memories relevant to the question",
+]
+CONSOLIDATE_MARKERS = [
+    "Summarize these episodic memories",
 ]
 IDA_MARKERS = [
     "tracking the current state of a roleplay scene",
@@ -47,17 +53,22 @@ class OllamaStub:
     """Drop-in stand-in for the Ollama /api/chat endpoint."""
 
     def __init__(self, importance: float = 0.8,
+                 memory_type: str = "episodic",
                  recall_response=None,
                  ida_response=None):
         """
         Args:
             importance: importance the "model" assigns to judged memories.
+            memory_type: memory_type the "model" assigns ("episodic" default
+                keeps event-like facts coexisting; pass "static" to exercise
+                supersession).
             recall_response: optional callable(question, memories) -> str
                 overriding the default keyword-overlap recall.
             ida_response: optional callable(previous_state_json) -> dict
                 overriding the default pass-through worldIDA response.
         """
         self.importance = importance
+        self.memory_type = memory_type
         self.recall_response = recall_response
         self.ida_response = ida_response
         self.calls: list[dict] = []
@@ -65,6 +76,9 @@ class OllamaStub:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         self.calls.append(payload)
+        # Embeddings endpoint (POST /api/embeddings with {"prompt": ...}).
+        if request.url.path == "/api/embeddings":
+            return self._embed(payload)
         prompt = payload["messages"][-1]["content"]
         content = self._respond(prompt)
         return httpx.Response(200, json={
@@ -79,6 +93,8 @@ class OllamaStub:
             return self._judge(prompt)
         if any(m in prompt for m in RECALL_MARKERS):
             return self._recall(prompt)
+        if any(m in prompt for m in CONSOLIDATE_MARKERS):
+            return self._consolidate(prompt)
         if any(m in prompt for m in IDA_MARKERS):
             return self._ida(prompt)
         return "ok"
@@ -88,16 +104,32 @@ class OllamaStub:
     def _judge(self, prompt: str) -> str:
         match = re.search(r'Message:\s*"((?:[^"\\]|\\.)*)"', prompt, re.S)
         memory = (match.group(1) if match else "").replace('\\"', '"').strip()
-        if not memory or len(memory) > 120:
-            memory = memory[:120].rsplit(" ", 1)[0]
         if not memory:
-            return json.dumps({"memory": "", "keywords": [], "importance": 0})
+            return json.dumps({"has_fact": False, "importance": 0,
+                               "memory_type": self.memory_type, "subject": "",
+                               "keywords": []})
         keywords = sorted(_tokens(memory) - _STOPWORDS)[:8]
+        subject = keywords[0] if keywords else "user"
         return json.dumps({
-            "memory": memory,
-            "keywords": keywords,
+            "has_fact": True,
             "importance": self.importance,
+            "memory_type": self.memory_type,
+            "subject": subject,
+            "keywords": keywords,
         })
+
+    def _embed(self, payload: dict) -> httpx.Response:
+        prompt = payload.get("prompt", "")
+        return httpx.Response(200, json={"embedding": self._hash_vec(prompt)})
+
+    @staticmethod
+    def _hash_vec(text: str) -> list:
+        """Deterministic bag-of-words vector: same token set → same vector,
+        so cosine similarity behaves like a rough semantic overlap."""
+        vec = [0.0] * 64
+        for tok in _tokens(text):
+            vec[zlib.crc32(tok.encode("utf-8")) % 64] += 1.0
+        return vec
 
     def _recall(self, prompt: str) -> str:
         q_match = re.search(r'Question:\s*"((?:[^"\\]|\\.)*)"', prompt, re.S)
@@ -117,6 +149,20 @@ class OllamaStub:
             if score > best_score:
                 best_score, best_idx = score, i
         return f"[{best_idx + 1}]" if best_idx >= 0 else "[]"
+
+    def _consolidate(self, prompt: str) -> str:
+        """Return a 'summary' that preserves the source memories verbatim
+        (joined), so hermetic tests can assert on the fused knowledge memory."""
+        block = prompt.split("Memories:")[1].split("Rules:")[0].strip()
+        lines = []
+        for line in block.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if ". " in line:
+                line = line.split(". ", 1)[1]
+            lines.append(line)
+        return json.dumps({"summary": " ".join(lines)})
 
     def _ida(self, prompt: str) -> str:
         prev_match = re.search(r"Previous state: (.+?)\nPersona:", prompt, re.S)

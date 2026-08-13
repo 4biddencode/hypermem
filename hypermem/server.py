@@ -54,7 +54,20 @@ class SessionStore:
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, HyperMEM] = {}
         self._lock = threading.Lock()
+        # Per-session asyncio locks serialize the mutate+persist sequence, so
+        # two concurrent requests on the same session can't lose a write.
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks_guard = threading.Lock()
         self._load_existing()
+
+    def lock(self, session_id: str) -> asyncio.Lock:
+        """Per-session asyncio lock (created lazily on first use)."""
+        with self._locks_guard:
+            lock = self._locks.get(session_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[session_id] = lock
+            return lock
 
     def _load_existing(self):
         for path in self._data_dir.glob("*.json"):
@@ -77,11 +90,9 @@ class SessionStore:
         sid = session_id or f"session_{int(time.time() * 1000)}"
         hm = HyperMEM(self._config, llm=self._llm)
         hm.state.conversation_id = sid
-        if session_id is None:
-            hm.state.recent_messages = []
-        # persist immediately if a fixed id was requested
-        if session_id is not None:
-            self._write(sid, hm)
+        # Persist immediately for BOTH fixed and auto-generated ids, so an
+        # auto session survives a restart even before its first mutation.
+        self._write(sid, hm)
         with self._lock:
             self._sessions[sid] = hm
         return hm
@@ -119,6 +130,8 @@ def _mem_to_dict(mem) -> dict:
     d = asdict(mem)
     d["memory_type"] = mem.memory_type.value
     d["effective_importance"] = round(mem.importance, 4)
+    # The raw embedding vector is internal — consumers get `content`.
+    d.pop("embedding", None)
     return d
 
 
@@ -212,11 +225,12 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.post("/sessions/{session_id}/messages")
     async def add_message(session_id: str, msg: MessageIn):
         hm = store.get(session_id)
-        result = await hm.add_message(
-            msg.role, msg.content,
-            memory_type=MemoryType(msg.memory_type),
-        )
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            result = await hm.add_message(
+                msg.role, msg.content,
+                memory_type=MemoryType(msg.memory_type),
+            )
+            store.persist(session_id, hm)
         return {
             "tagged": _mem_to_dict(result.tagged) if result.tagged else None,
             "recalled": _recall_to_dict(result.recalled) if result.recalled else None,
@@ -226,8 +240,9 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.post("/sessions/{session_id}/remember")
     async def remember(session_id: str, body: RememberIn):
         hm = store.get(session_id)
-        mem = hm.remember(body.content, MemoryType(body.memory_type))
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            mem = hm.remember(body.content, MemoryType(body.memory_type))
+            store.persist(session_id, hm)
         return {"memory": _mem_to_dict(mem), **_summary(hm)}
 
     @app.get("/sessions/{session_id}/recall")
@@ -235,15 +250,17 @@ def create_app(config: Optional[HyperMemConfig] = None,
         if not query:
             raise HTTPException(400, "query parameter is required")
         hm = store.get(session_id)
-        result = await hm.recall(query)
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            result = await hm.recall(query)
+            store.persist(session_id, hm)
         return _recall_to_dict(result)
 
     @app.get("/sessions/{session_id}/context")
     async def get_context(session_id: str, message: str = ""):
         hm = store.get(session_id)
-        ctx = await hm.get_context(message)
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            ctx = await hm.get_context(message)
+            store.persist(session_id, hm)
         return PlainTextResponse(ctx)
 
     @app.get("/sessions/{session_id}/memories")
@@ -254,8 +271,9 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.put("/sessions/{session_id}/persona")
     async def set_persona(session_id: str, body: PersonaIn):
         hm = store.get(session_id)
-        hm.set_persona(Persona(**body.model_dump()))
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            hm.set_persona(Persona(**body.model_dump()))
+            store.persist(session_id, hm)
         return {"persona_set": True}
 
     # ---- World state ----
@@ -272,10 +290,61 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.post("/sessions/{session_id}/world-ida/update")
     async def update_world_ida(session_id: str, body: WorldIDAIn):
         hm = store.get(session_id)
-        await hm.update_world_ida(body.user_msg, body.ai_msg, body.persona_context)
-        store.persist(session_id, hm)
+        async with store.lock(session_id):
+            await hm.update_world_ida(body.user_msg, body.ai_msg, body.persona_context)
+            store.persist(session_id, hm)
         from .world_ida import _ida_to_dict
         return {"world_ida": _ida_to_dict(hm.get_world_ida())}
+
+    # ---- Provenance ----
+
+    @app.get("/sessions/{session_id}/memories/{memory_id}")
+    async def memory_provenance(session_id: str, memory_id: str, query: str = ""):
+        """Why this memory exists (source message + judge classification) and,
+        with ?query=, why it would surface (live score breakdown)."""
+        hm = store.get(session_id)
+        location = "active"
+        mem = next((m for m in hm.state.active if m.id == memory_id), None)
+        if mem is None:
+            mem = next((m for m in hm.state.archive if m.id == memory_id), None)
+            location = "archive"
+        if mem is None:
+            raise HTTPException(404, f"memory '{memory_id}' not found")
+
+        stored_from = None
+        if mem.source_message_id:
+            stored_from = next(
+                (m.content for m in hm.state.recent_messages
+                 if m.id == mem.source_message_id),
+                None)
+        if location == "active":
+            lifecycle = "active"
+        elif mem.superseded_by:
+            lifecycle = "superseded"
+        else:
+            lifecycle = "archived"
+
+        payload = {
+            "id": mem.id,
+            "content": mem.content,
+            "memory_type": mem.memory_type.value,
+            "importance": round(mem.importance, 4),
+            "subject": mem.subject,
+            "keywords": mem.keywords,
+            "source": mem.source,
+            "source_message_id": mem.source_message_id,
+            "stored_from": stored_from,
+            "created_at": mem.created_at,
+            "last_accessed_at": mem.last_accessed_at,
+            "access_count": mem.access_count,
+            "pinned": mem.pinned,
+            "lifecycle": lifecycle,
+            "superseded_by": mem.superseded_by,
+            "consolidated_from": mem.consolidated_from,
+        }
+        if query:
+            payload["ranking"] = await hm.explain_recall(query, mem.id)
+        return payload
 
     # ---- Export / import ----
 

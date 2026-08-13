@@ -97,6 +97,113 @@ class LLMRateLimitError(LLMError):
     pass
 
 
+def _strip_fences(raw: str) -> str:
+    """Remove ```json ... ``` (or ``` ... ```) markdown fences."""
+    cleaned = raw.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```")[1].split("```")[0].strip()
+    return cleaned
+
+
+def _balanced_blocks(text: str) -> list[str]:
+    """Return the text of each top-level {...} block found in ``text``."""
+    blocks = []
+    i = 0
+    while True:
+        start = text.find("{", i)
+        if start < 0:
+            break
+        depth = 0
+        in_str = False
+        esc = False
+        for j in range(start, len(text)):
+            ch = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        blocks.append(text[start:j + 1])
+                        i = j + 1
+                        break
+        else:
+            i = start + 1
+    return blocks
+
+
+def _lenient_load(text: str):
+    """Parse an LLM JSON-ish object, tolerating Python-style quirks.
+
+    Tries (in order): strict json → trailing-comma/True/None fixups →
+    ast.literal_eval (handles single quotes, None/True/False, etc.).
+    """
+    import ast
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    fixed = _fix_common_json_quirks(text)
+    if fixed is not None:
+        try:
+            return json.loads(fixed)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError, TypeError):
+        return None
+
+
+def _fix_common_json_quirks(text: str) -> Optional[str]:
+    """Patch trailing commas and Python True/False/None into strict JSON."""
+    fixed = re.sub(r",\s*([}\]])", r"\1", text)
+    fixed = re.sub(r"\bTrue\b", "true", fixed)
+    fixed = re.sub(r"\bFalse\b", "false", fixed)
+    fixed = re.sub(r"\bNone\b", "null", fixed)
+    return fixed
+
+
+def extract_json_object(raw: str) -> Optional[dict]:
+    """Best-effort parse of a JSON *object* from an LLM response.
+
+    Handles markdown fences, prose wrapped around the JSON, single-quoted
+    keys/values, trailing commas and Python-style literals — the failure
+    modes that trip up smaller / non-instruction-tuned models.
+    """
+    cleaned = _strip_fences(raw or "")
+    for candidate in [cleaned] + _balanced_blocks(cleaned):
+        if not candidate.strip():
+            continue
+        parsed = _lenient_load(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def extract_json_list(raw: str) -> Optional[list]:
+    """Best-effort parse of a JSON *array* from an LLM response."""
+    cleaned = _strip_fences(raw or "")
+    for candidate in [cleaned] + _balanced_blocks(cleaned):
+        if not candidate.strip():
+            continue
+        parsed = _lenient_load(candidate)
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
 def _extract_indices(raw: str) -> list[int]:
     """Parse 1-based memory indices out of an LLM recall response.
 

@@ -1,5 +1,6 @@
 """Tests for the HyperMEM REST server (hermetic: stubbed Ollama API)."""
 
+import asyncio
 import pytest
 import httpx
 from pathlib import Path
@@ -164,6 +165,94 @@ async def test_persistence_across_restart(tmp_path: Path):
         assert any(s["conversation_id"] == "persist1" for s in resp.json()["sessions"])
         mems = (await c.get("/sessions/persist1/memories")).json()["memories"]
         assert any("Oakvale" in m["content"] for m in mems)
+
+
+@pytest.mark.asyncio
+async def test_memory_provenance(client):
+    """GET /sessions/{id}/memories/{id} explains why a memory exists and
+    optionally why it would surface (live score breakdown)."""
+    await client.post("/sessions", json={"session_id": "s7"})
+    await client.post("/sessions/s7/messages", json={
+        "role": "user", "content": "My name is Emanuel and I love hiking",
+    })
+
+    mems = (await client.get("/sessions/s7/memories")).json()["memories"]
+    mid = mems[0]["id"]
+
+    resp = await client.get(f"/sessions/s7/memories/{mid}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["lifecycle"] == "active"
+    assert data["source_message_id"] is not None
+    assert data["stored_from"] == "My name is Emanuel and I love hiking"
+    assert "embedding" not in data  # internal vector never leaks
+
+    # With a query → the live hybrid score breakdown
+    resp = await client.get(f"/sessions/s7/memories/{mid}",
+                            params={"query": "What's my name?"})
+    ranking = resp.json()["ranking"]
+    assert set(ranking) == {"cosine", "lexical", "importance", "recency",
+                            "identity_boost", "total"}
+    assert ranking["identity_boost"] == 1.5  # identity query boosts it
+
+    # Unknown memory → 404
+    assert (await client.get("/sessions/s7/memories/nope")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_auto_session_persisted_on_create(tmp_path: Path):
+    """An auto-generated (no fixed id) session survives a restart even before
+    its first mutation — persisted at create time."""
+    llm, _ = make_llm()
+    app1 = create_app(HyperMemConfig(), tmp_path, llm=llm)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app1), base_url="http://test"
+    ) as c:
+        resp = await c.post("/sessions", json={})
+        assert resp.status_code == 201
+        sid = resp.json()["session_id"]
+        assert sid.startswith("session_")
+
+    app2 = create_app(HyperMemConfig(), tmp_path, llm=llm)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        resp = await c.get(f"/sessions/{sid}")
+        assert resp.status_code == 200
+        assert resp.json()["total_messages"] == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_messages_do_not_lose_writes(client):
+    """The per-session lock serializes mutate+persist: 20 concurrent message
+    posts must all land (no read-modify-write race)."""
+    await client.post("/sessions", json={"session_id": "s8"})
+
+    # Distinct token sets per message — identical wording would be near-dup
+    # deduped into one memory, which is not what this test is about.
+    tomes = ["griffin", "phoenix", "wyvern", "basilisk", "manticore",
+             "chimera", "sphinx", "kraken", "gorgon", "harpy",
+             "centaur", "minotaur", "hippogriff", "pegasus", "siren",
+             "griffon", "leviathan", "behemoth", "roc", "jackalope"]
+
+    async def post(tome: str):
+        resp = await client.post("/sessions/s8/messages", json={
+            "role": "user",
+            "content": f"I own a library in Corvus where I catalog the {tome} scroll",
+        })
+        return resp.status_code
+
+    codes = await asyncio.gather(*[post(t) for t in tomes])
+    assert all(c == 200 for c in codes)
+
+    # The lock guarantees every message was processed: total_messages counts
+    # each add_message, so a lost write would show up here. (Memory count can
+    # be < 20 — near-duplicate wording is legitimately deduped.)
+    summary = (await client.get("/sessions/s8")).json()
+    assert summary["total_messages"] == 20
+    mems = (await client.get("/sessions/s8/memories")).json()["memories"]
+    assert 1 <= len(mems) <= 20
+    assert all("Corvus" in m["content"] for m in mems)
 
 
 @pytest.mark.asyncio

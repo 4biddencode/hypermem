@@ -212,17 +212,21 @@ class TestContradictionEdgeCases:
     """Extreme contradiction scenarios."""
 
     def test_self_contradiction_chain(self):
-        """A -> B -> C chain of contradictions should track all supersessions."""
+        """A -> B -> C chain of corrections should track all supersessions."""
         mem_a = HyperMem(
             id="a", content="Name is Alice", created_at=time.time(),
             last_accessed_at=time.time(), access_count=0, keywords=["alice", "name"],
             importance=0.8, source="auto", memory_type=MemoryType.STATIC,
         )
-        _, mem_b = _resolve_conflict(mem_a, "Name is Bob", 0.8)
+        _, mem_b = _resolve_conflict(
+            mem_a, "Actually, my name is Bob", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["name", "bob"])
         assert mem_b is not None
         mem_a.superseded_by = mem_b.id
 
-        _, mem_c = _resolve_conflict(mem_b, "Name is Charlie", 0.8)
+        _, mem_c = _resolve_conflict(
+            mem_b, "Actually, my name is Charlie", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["name", "charlie"])
         assert mem_c is not None
         mem_b.superseded_by = mem_c.id
 
@@ -230,29 +234,31 @@ class TestContradictionEdgeCases:
         assert mem_b.superseded_by == mem_c.id
         assert mem_c.superseded_by is None
 
-    def test_conflict_with_identical_content(self):
-        """Same content should not create a new memory."""
+    def test_same_content_does_not_conflict(self):
+        """Identical content is handled by dedup in add_message (in-place
+        refresh), not by supersession — _resolve_conflict must never replace
+        a memory with an identical copy."""
         existing = HyperMem(
             id="original", content="Name is Bob", created_at=time.time(),
             last_accessed_at=time.time(), access_count=0, keywords=["bob", "name"],
             importance=0.8, source="auto", memory_type=MemoryType.STATIC,
         )
-        should_replace, replacement = _resolve_conflict(existing, "Name is Bob", 0.8)
-        # Same content — still triggers replace (static always supersedes)
-        # This is acceptable — the old is archived and new is created
-        assert should_replace is True
-        assert replacement is not None
+        should_replace, replacement = _resolve_conflict(
+            existing, "Name is Bob", 0.8, MemoryType.STATIC)
+        assert should_replace is False
+        assert replacement is None
 
     def test_conflict_empty_string(self):
-        """Empty string should not cause crash."""
+        """Empty string should not crash or replace anything."""
         existing = HyperMem(
             id="e", content="Something", created_at=time.time(),
             last_accessed_at=time.time(), access_count=0, keywords=["something"],
             importance=0.8, source="auto", memory_type=MemoryType.STATIC,
         )
-        should_replace, replacement = _resolve_conflict(existing, "", 0.5)
-        assert should_replace is True
-        assert replacement is not None
+        should_replace, replacement = _resolve_conflict(
+            existing, "", 0.5, MemoryType.STATIC)
+        assert should_replace is False
+        assert replacement is None
 
     def test_many_simultaneous_conflicts(self):
         """100 simultaneous conflicts should resolve without error."""

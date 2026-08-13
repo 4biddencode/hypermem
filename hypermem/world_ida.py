@@ -77,15 +77,16 @@ def _build_update_prompt(previous_ida: Optional[WorldIDA],
                          last_ai_response: str,
                          persona_context: Optional[str] = None) -> str:
     """Build the system prompt for the worldIDA update LLM call."""
-    previous_json = "null (first turn — initialize from the exchange)"
     if previous_ida is not None:
-        previous_json = json.dumps(_ida_to_dict(previous_ida), indent=2)
+        previous_json = json.dumps(_ida_to_dict(previous_ida))
+    else:
+        previous_json = "null (first turn — initialize the scene from the exchange)"
 
     ctx = persona_context or "No persona context provided."
 
-    return f"""You are tracking the current state of a roleplay scene. Output a JSON object with exactly these 5 sections:
+    return f"""You are tracking the current state of a roleplay scene. Output a compact JSON object with ONLY the fields that changed.
 
-SCHEMA:
+SCHEMA (field names):
 {{
   "scene": {{"location": "", "sub_location": null, "time_of_day": "", "ambient_conditions": null, "ongoing_action": "", "last_completed_action": null, "interrupted_action": null}},
   "user": {{"physical_state": ""}},
@@ -95,13 +96,13 @@ SCHEMA:
 }}
 
 RULES:
-1. Only change fields where the latest exchange gives clear evidence. Copy unchanged fields forward.
+1. Output ONLY fields that changed or are new — omit unchanged fields entirely. An unchanged turn can be just {{"meta": {{"turn_count_in_scene": 5}}}}.
 2. scene_changed=true ONLY if location, time_of_day, or fundamental activity changed. Natural continuation is NOT a scene change.
 3. If scene_changed=true, reset turn_count_in_scene to 0. Otherwise increment by 1.
 4. mood and physical_state are snapshots after the latest exchange.
 5. If exchange contradicts previous state, trust the latest exchange but lower confidence.
 6. Never modify persona-level traits.
-7. Output ONLY valid JSON matching the SCHEMA exactly. No preamble, no explanation.
+7. Output ONLY valid JSON. No preamble, no explanation.
 
 Previous state: {previous_json}
 Persona: {ctx}
@@ -134,15 +135,21 @@ def _ida_to_dict(ida: WorldIDA) -> dict:
 
 
 def _validate_ida(data: dict) -> bool:
-    """Validate that the LLM response is a valid WorldIDA."""
-    required_sections = ["scene", "user", "character", "relationship", "meta"]
-    for section in required_sections:
-        if section not in data or not isinstance(data[section], dict):
-            return False
-    # meta must have scene_changed and turn_count_in_scene
-    meta = data.get("meta", {})
-    if "scene_changed" not in meta or "turn_count_in_scene" not in meta:
+    """Validate that the LLM response is a usable WorldIDA update.
+
+    Accepts partial output (only changed fields) — at minimum a meta block
+    or one known section. Unchanged fields are carried over from the
+    previous state during the merge.
+    """
+    if not isinstance(data, dict):
         return False
+    known = {"scene", "user", "character", "relationship", "meta"}
+    provided = [k for k in data if k in known]
+    if not provided:
+        return False
+    for k in provided:
+        if not isinstance(data[k], dict):
+            return False
     return True
 
 
@@ -207,15 +214,16 @@ async def update_world_ida(
         # Success — reset failure counter
         update_world_ida._failure_count = 0
 
-        # Build from parsed, carrying over any missing fields from previous
-        new_ida = _ida_from_dict(parsed)
-
-        # Carry forward relationship fields that persist across scenes
+        # Merge partial output over the previous state, so unchanged fields
+        # survive a compact "only what changed" response.
         if previous_ida is not None:
-            if not new_ida.relationship.stage and previous_ida.relationship.stage:
-                new_ida.relationship.stage = previous_ida.relationship.stage
-            if new_ida.relationship.trust_level is None and previous_ida.relationship.trust_level is not None:
-                new_ida.relationship.trust_level = previous_ida.relationship.trust_level
+            base = _ida_to_dict(previous_ida)
+            for section, fields in parsed.items():
+                if isinstance(fields, dict):
+                    base.setdefault(section, {}).update(fields)
+            new_ida = _ida_from_dict(base)
+        else:
+            new_ida = _ida_from_dict(parsed)
 
         return new_ida
 

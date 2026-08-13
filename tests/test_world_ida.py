@@ -175,6 +175,31 @@ async def test_relationship_persists_across_scenes():
     assert result.relationship.trust_level == "high"  # carried forward
 
 
+@pytest.mark.asyncio
+async def test_partial_update_merges_over_previous():
+    """A compact 'only what changed' response is merged over the previous
+    state — untouched fields survive (the partial-output contract)."""
+    prev = make_ida()
+    # LLM returns ONLY the changed fields — no scene/user/relationship at all.
+    response = json.dumps({
+        "character": {"mood": "angry"},
+        "meta": {"turn_count_in_scene": 6},
+    })
+
+    llm = StubLLM(response)
+    result = await update_world_ida(prev, "You're lying!", "I don't lie.", llm_complete=llm)
+
+    # changed fields applied
+    assert result.character.mood == "angry"
+    assert result.meta.turn_count_in_scene == 6
+    # untouched fields carried forward
+    assert result.scene.location == "tavern"
+    assert result.character.physical_state == "leaning forward, elbows on table"
+    assert result.user.physical_state == "seated at the table"
+    assert result.relationship.stage == "just met"
+    assert result.character.energy_level == "alert"
+
+
 # ---- Malformed LLM fallback ----
 
 @pytest.mark.asyncio
@@ -264,13 +289,21 @@ def test_validate_ida_valid():
 
 
 def test_validate_ida_missing_section():
-    """Missing section fails validation."""
+    """A partial update (only changed sections) is accepted — unchanged
+    fields are carried over from the previous state during the merge."""
     data = {
         "scene": {"location": "tavern"},
         "user": {"physical_state": "seated"},
-        # missing character, relationship, meta
+        # missing character, relationship, meta — fine for a compact update
     }
-    assert _validate_ida(data) is False
+    assert _validate_ida(data) is True
+
+
+def test_validate_ida_empty_rejected():
+    """A response with no known sections is rejected."""
+    assert _validate_ida({}) is False
+    assert _validate_ida({"unrelated": "x"}) is False
+    assert _validate_ida("not a dict") is False
 
 
 # ---- Store ----

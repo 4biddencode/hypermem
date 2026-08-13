@@ -145,7 +145,9 @@ class TestDecay:
 class TestContradictionResolution:
     def test_static_supersedes(self):
         existing = make_mem("User name is Bob", MemoryType.STATIC)
-        should_replace, replacement = _resolve_conflict(existing, "User name is Robert", 0.8)
+        should_replace, replacement = _resolve_conflict(
+            existing, "Actually, my name is Robert", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["name", "robert"])
         assert should_replace is True
         assert replacement is not None
         assert "Robert" in replacement.content
@@ -158,9 +160,23 @@ class TestContradictionResolution:
 
     def test_temporal_replaces(self):
         existing = make_mem("Mood: happy", MemoryType.TEMPORAL)
-        should_replace, replacement = _resolve_conflict(existing, "Mood: sad", 0.8)
+        should_replace, replacement = _resolve_conflict(
+            existing, "Actually, my mood is sad", 0.8,
+            MemoryType.TEMPORAL, subject="user", new_keywords=["mood", "sad"])
         assert should_replace is True
         assert replacement is not None
+
+    def test_shared_keyword_alone_never_supersedes(self):
+        """Two static facts sharing a topic ("crown") must coexist — the
+        "silently lost facts" regression: the crown's power must not delete
+        the crown quest just because both mention the crown."""
+        existing = make_mem("Searching for the Lost Crown of Aetheria in the Dragon's Maw",
+                            MemoryType.STATIC)
+        should_replace, replacement = _resolve_conflict(
+            existing, "The crown can control the weather when worn", 0.8,
+            MemoryType.STATIC, subject="crown", new_keywords=["crown", "weather", "control"])
+        assert should_replace is False
+        assert replacement is None
 
     def test_find_conflicts_keyword_overlap(self):
         mems = [make_mem("User name is Bob")]
@@ -226,6 +242,190 @@ class TestCoexistence:
         assert _is_identity_statement("I'm known as Eldrin")
 
 
+# ---- Ingestion: verbatim storage, gating, dedup, supersession ----
+
+class TestIngestion:
+    @pytest.mark.asyncio
+    async def test_message_stored_verbatim(self):
+        """The stored memory is the user's exact message — the judge classifies,
+        it does not rewrite (paraphrase drift destroyed recall substrings)."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        msg = "My name is Eldrin and I grew up in Silverwood"
+        await hm.add_message("user", msg)
+        assert len(hm.state.active) == 1
+        assert hm.state.active[0].content == msg
+
+    @pytest.mark.asyncio
+    async def test_judge_classification_captured(self):
+        """subject / memory_type / source_message_id come from the judge."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "My name is Eldrin")
+        mem = hm.state.active[0]
+        assert mem.memory_type == MemoryType.EPISODIC  # stub default
+        assert mem.subject  # stub assigns the first keyword
+        assert mem.source_message_id is not None
+        assert "name" in mem.keywords  # deterministic identity tag
+
+    @pytest.mark.asyncio
+    async def test_identical_message_deduped(self):
+        """Re-sending the same message refreshes the memory instead of
+        storing a second copy."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "I live in Berlin")
+        r2 = await hm.add_message("user", "I live in Berlin")
+        assert len(hm.state.active) == 1
+        assert r2.tagged is hm.state.active[0]
+        assert hm.state.active[0].access_count >= 1  # refreshed, not duplicated
+
+    @pytest.mark.asyncio
+    async def test_embedding_near_duplicate_deduped(self):
+        """Same fact, slightly different wording → one memory when embeddings
+        are enabled (semantic dedup)."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(embedding_provider="ollama"), llm=client)
+        await hm.add_message("user", "I love pizza and I love pasta")
+        await hm.add_message("user", "I love pizza and pasta")
+        assert len(hm.state.active) == 1
+
+    @pytest.mark.asyncio
+    async def test_correction_supersedes_old_static_fact(self):
+        """'Actually, I changed the vault password…' replaces the old vault
+        fact (same subject, correction cue) — the contradiction fix."""
+        client, _ = make_llm(memory_type="static")
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "The vault password is Starlight")
+        await hm.add_message("user", "Actually, I changed the vault password to Midnight")
+        assert len(hm.state.active) == 1
+        assert "Midnight" in hm.state.active[0].content
+        assert len(hm.state.archive) == 1  # old fact archived, superseded
+
+    @pytest.mark.asyncio
+    async def test_topic_overlap_coexists(self):
+        """Two static facts sharing a topic ('crown') must both be stored —
+        never drop a fact just because it shares a keyword with another."""
+        client, _ = make_llm(memory_type="static")
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "Searching for the Lost Crown of Aetheria in the Dragon's Maw")
+        await hm.add_message("user", "The crown can control the weather when worn")
+        assert len(hm.state.active) == 2
+
+
+# ---- Recall: hybrid scoring, budget, relevance floor ----
+
+class TestRecallScoring:
+    @pytest.mark.asyncio
+    async def test_token_budget_caps_context(self):
+        """max_recall_tokens bounds how much context recall injects, even
+        when every memory clears the relevance floor."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(max_recall_tokens=20), llm=client)
+        await hm.add_message("user", "I collect antique pocket watches")
+        await hm.add_message("user", "My favorite meal is lasagna")
+        await hm.add_message("user", "I study the migration of monarch butterflies")
+        r = await hm.recall("a random unrelated question here")
+        # ~30-45 chars each ≈ 8-11 tokens; budget 20 fits the first two only
+        assert len(r.relevant) == 2
+
+    @pytest.mark.asyncio
+    async def test_off_topic_below_floor_pruned(self):
+        """A memory with no query overlap is dropped by the relative floor,
+        even when it is recent and important — recall must not surface the
+        whole store for an off-topic question."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "My name is Emanuel and I love hiking")
+        await hm.add_message("user", "My sister Lyra collects rare orchids")
+        r = await hm.recall("Tell me about my sister")
+        assert any("sister" in m.content.lower() for m in r.relevant)
+        assert not any("emanuel" in m.content.lower() for m in r.relevant)
+
+    @pytest.mark.asyncio
+    async def test_recall_use_llm_second_opinion_called(self):
+        """recall_use_llm=True consults the LLM rank as a second opinion
+        without breaking hybrid ranking (regression: the boost used to
+        mutate an unpacked tuple and never change the order)."""
+        client, stub = make_llm(recall_response=lambda q, mems: "[]")
+        hm = HyperMEM(HyperMemConfig(recall_use_llm=True), llm=client)
+        await hm.add_message("user", "I have a dog named Rex and he lives in Berlin")
+        r = await hm.recall("Where does Rex live?")
+        assert len(r.relevant) == 1
+        assert "Berlin" in r.relevant[0].content
+        recall_calls = [c for c in stub.calls
+                        if any("find memories relevant" in str(m.get("content", ""))
+                               for m in c.get("messages", []))]
+        assert len(recall_calls) >= 1  # the LLM was actually consulted
+
+
+# ---- Lifecycle: forgetting + consolidation ----
+
+class TestLifecycle:
+    @pytest.mark.asyncio
+    async def test_recall_excludes_superseded(self):
+        """After a correction supersedes a fact, recall must not return the
+        stale (superseded) version — the deterministic stale-leak fix."""
+        client, _ = make_llm(memory_type="static")
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "The vault password is Starlight")
+        await hm.add_message("user", "Actually, I changed the vault password to Midnight")
+        recall = await hm.recall("What's the vault password?")
+        assert len(recall.relevant) == 1
+        assert "Midnight" in recall.relevant[0].content
+        assert "Starlight" not in recall.relevant[0].content
+
+    @pytest.mark.asyncio
+    async def test_search_archive_opt_in(self):
+        """Decay-archived memories are excluded from recall by default but
+        searchable when search_archive is enabled (forensic recall)."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(max_active_memories=1), llm=client)
+        await hm.add_message("user", "I love hiking in the Alps")
+        await hm.add_message("user", "My sister Lyra lives in Oakvale")
+        assert len(hm.state.active) == 1
+        assert len(hm.state.archive) == 1
+        recall = await hm.recall("What do I love?")
+        assert not any("hiking" in m.content.lower() for m in recall.relevant)
+
+        hm2 = HyperMEM(HyperMemConfig(max_active_memories=1, search_archive=True), llm=client)
+        await hm2.add_message("user", "I love hiking in the Alps")
+        await hm2.add_message("user", "My sister Lyra lives in Oakvale")
+        recall2 = await hm2.recall("What do I love?")
+        assert any("hiking" in m.content.lower() for m in recall2.relevant)
+
+    @pytest.mark.asyncio
+    async def test_episodic_consolidation(self):
+        """Once a subject accumulates >= threshold episodic events, the oldest
+        are fused into one static knowledge memory and the originals archived."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(consolidation_threshold=3, consolidation_interval=1),
+                      llm=client)
+        await hm.add_message("user", "I journeyed to the black mountain")
+        await hm.add_message("user", "I climbed the black mountain")
+        await hm.add_message("user", "I camped at the black mountain")
+
+        assert len(hm.state.active) == 1
+        fused = hm.state.active[0]
+        assert fused.memory_type == MemoryType.STATIC
+        assert len(fused.consolidated_from or []) == 3
+        assert len(hm.state.archive) == 3
+        assert all(m.superseded_by == fused.id for m in hm.state.archive)
+
+    @pytest.mark.asyncio
+    async def test_consolidation_throttled_by_interval(self):
+        """Consolidation does not fire until consolidation_interval messages
+        have passed since the last run."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(consolidation_threshold=2, consolidation_interval=10),
+                      llm=client)
+        await hm.add_message("user", "I journeyed to the black mountain")
+        await hm.add_message("user", "I climbed the black mountain")
+        # Only 2 messages so far, interval is 10 → no consolidation yet
+        assert len(hm.state.archive) == 0
+        assert len(hm.state.active) == 2
+
+
 # ---- Edge cases ----
 
 class TestEdgeCases:
@@ -260,7 +460,9 @@ class TestEdgeCases:
 
     def test_superseded_memory_tracked(self):
         existing = make_mem("User name is Bob", MemoryType.STATIC)
-        should_replace, replacement = _resolve_conflict(existing, "User name is Robert", 0.8)
+        should_replace, replacement = _resolve_conflict(
+            existing, "Actually, my name is Robert", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["name", "robert"])
         assert should_replace
         existing.superseded_by = replacement.id
         assert existing.superseded_by == replacement.id

@@ -19,7 +19,7 @@ def capture_handler(requests_log: list):
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests_log.append(request)
-        if "anthropic" in request.url.path:
+        if request.url.host == "api.anthropic.com":
             return httpx.Response(200, json={
                 "content": [{"type": "text", "text": "hello from claude"}],
             })
@@ -186,11 +186,12 @@ class TestEngineWiring:
         def handler(request: httpx.Request) -> httpx.Response:
             log.append(request)
             prompt = json.loads(request.content)["messages"][-1]["content"]
-            if "Extract the key factual information" in prompt:
+            if "Decide whether this message contains a fact worth remembering" in prompt:
                 return httpx.Response(200, json={"choices": [{
                     "message": {"content": json.dumps(
-                        {"memory": "User lives in Berlin", "keywords": ["berlin"],
-                         "importance": 0.9})}}]})
+                        {"has_fact": True, "importance": 0.9,
+                         "memory_type": "static", "subject": "user",
+                         "keywords": ["berlin", "lives"]})}}]})
             if "find memories relevant" in prompt:
                 return httpx.Response(200, json={"choices": [{"message": {"content": "[]"}}]})
             return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})

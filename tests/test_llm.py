@@ -69,7 +69,8 @@ class TestRecallPipeline:
     async def test_recall_returns_ranked_list(self):
         """LLM may return several indices; recall honors the order."""
         client, _ = make_llm(recall_response=lambda q, mems: "[2, 1]")
-        hm = HyperMEM(HyperMemConfig(), llm=client)
+        # Embeddings off → forces the LLM+lexical path these overrides test.
+        hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "fact one about mountains")
         await hm.add_message("user", "fact two about oceans")
         result = await hm.recall("tell me something")
@@ -80,7 +81,7 @@ class TestRecallPipeline:
     async def test_empty_list_uses_keyword_fallback(self):
         """LLM returns [] but a memory shares keywords → still recalled."""
         client, _ = make_llm(recall_response=lambda q, mems: "[]")
-        hm = HyperMEM(HyperMemConfig(), llm=client)
+        hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "I have a dog named Rex and he lives in Berlin")
         result = await hm.recall("Where does Rex live?")
         assert len(result.relevant) == 1
@@ -89,7 +90,7 @@ class TestRecallPipeline:
     @pytest.mark.asyncio
     async def test_no_overlap_no_recall(self):
         client, _ = make_llm(recall_response=lambda q, mems: "[]")
-        hm = HyperMEM(HyperMemConfig(), llm=client)
+        hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "My favorite color is teal")
         result = await hm.recall("What is the weather like today?")
         assert result.relevant == []
@@ -97,7 +98,7 @@ class TestRecallPipeline:
     @pytest.mark.asyncio
     async def test_out_of_range_indices_ignored(self):
         client, _ = make_llm(recall_response=lambda q, mems: "[7, 2]")
-        hm = HyperMEM(HyperMemConfig(), llm=client)
+        hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
         await hm.add_message("user", "only one fact here")
         result = await hm.recall("some query")
         assert result.relevant == []  # both indices exceed the memory list

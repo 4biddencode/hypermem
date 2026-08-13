@@ -35,6 +35,10 @@ class HyperMem:
     superseded_by: Optional[str] = None  # ID of memory that replaced this one
     trigger: Optional[str] = None
     pinned: bool = False
+    subject: str = ""                    # short entity this fact is about ("user", "lyra", "vault password")
+    embedding: Optional[list] = None     # semantic vector (list[float]) for recall
+    source_message_id: Optional[str] = None  # the chat message this memory came from
+    consolidated_from: Optional[list] = None  # IDs of episodic memories merged into this one
 
 
 @dataclass
@@ -90,6 +94,18 @@ class HyperMemConfig:
     llm_model: str = "qwen2.5:7b"
     llm_endpoint: str = "http://localhost:11434"
     llm_api_key: Optional[str] = None
+    # ---- recall ----
+    embedding_provider: str = "auto"   # "auto" | "ollama" | "openai" | "none"
+    embedding_model: Optional[str] = None      # e.g. "nomic-embed-text"
+    embedding_endpoint: Optional[str] = None   # override embed base URL
+    embedding_api_key: Optional[str] = None
+    recall_use_llm: bool = False       # when embeddings are on, also run the LLM rank
+    max_recall_tokens: int = 300       # context-window budget for recalled memories
+    search_archive: bool = False       # whether decay-archived memories stay recallable
+    # ---- ingestion / lifecycle ----
+    max_memory_chars: int = 1000       # verbatim content cap
+    consolidation_threshold: int = 6   # episodic memories per subject before consolidation (0=off)
+    consolidation_interval: int = 20   # min messages between consolidation runs
 
 
 def state_to_dict(state: HyperMemState) -> dict:
