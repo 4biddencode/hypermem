@@ -192,7 +192,7 @@ async def test_memory_provenance(client):
                             params={"query": "What's my name?"})
     ranking = resp.json()["ranking"]
     assert set(ranking) == {"cosine", "lexical", "importance", "recency",
-                            "identity_boost", "total"}
+                            "identity_boost", "echo_penalty", "total"}
     assert ranking["identity_boost"] == 1.5  # identity query boosts it
 
     # Unknown memory → 404

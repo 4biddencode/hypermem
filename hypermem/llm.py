@@ -424,11 +424,13 @@ ENGLISH ONLY."""
             return None
 
     async def find_relevant(self, message: str, memories: list,
-                            max_results: int = 3) -> list[int]:
+                            max_results: int = 3, raw: bool = False) -> list[int]:
         """Ask LLM which memories are relevant to the current message.
 
         Returns 0-based indices into ``memories``, best first. Falls back to
-        keyword overlap when the LLM returns no usable answer.
+        keyword overlap when the LLM returns no usable answer. With ``raw``,
+        only the LLM's own picks are returned (no keyword-overlap ordering)
+        — used when the caller needs the model's semantic judgment alone.
         """
         if not memories:
             return []
@@ -463,6 +465,8 @@ If no memory is relevant, return []."""
             indices = _extract_indices(result)
             if indices:
                 indices = indices[:max_results]
+                if raw:
+                    return indices
                 # Lexical evidence first (deterministic), then LLM picks
                 # (deduplicated). A small model that ranks the wrong memory
                 # cannot hide a fact the question literally names.
@@ -472,6 +476,8 @@ If no memory is relevant, return []."""
                         ordered.append(i)
                 return ordered[:max_results]
 
+        if raw:
+            return []
         return LLMClient._keyword_fallback(message, memories)
 
     @staticmethod
@@ -480,12 +486,15 @@ If no memory is relevant, return []."""
         q = set(re.findall(r"[a-z0-9]{3,}", message.lower()))
         if not q:
             return []
-        # "What's my name?" / "Who am I?" — first-person identity queries
-        # (checked on the raw text: "my"/"i" are too short for the token set).
-        # "my sister's name" is NOT about the user → excluded.
-        identity_query = (bool({"name", "called", "known"} & q)
-                          and bool(re.search(r"\b(my|me|mine|i)\b", message, re.I))
-                          and not re.search(r"\bmy \w+'s\b", message, re.I))
+        # "What's my name?" / "Who am I?" — the user is the subject of the
+        # name question. "What's my bow called?", "my sister's name", and
+        # "the king's name" are about a thing or another person, never the
+        # user, so they are not identity queries.
+        identity_query = bool(re.search(
+            r"\bmy name\b|\bwho am i\b|\bwhat (?:am i|'m i|are we) called\b"
+            r"|\bwhat('s| is) my name\b",
+            message, re.I,
+        ))
         scored = []
         for i, mem in enumerate(memories):
             haystack = set(re.findall(r"[a-z0-9]{3,}", mem.content.lower()))

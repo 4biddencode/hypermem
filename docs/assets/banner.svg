@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0B0D10"/>
+      <stop offset="1" stop-color="#0F1216"/>
+    </linearGradient>
+    <!-- panel -->
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14181D"/>
+      <stop offset="1" stop-color="#101317"/>
+    </linearGradient>
+    <!-- subtle left accent rail -->
+    <linearGradient id="rail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#53B1FF"/>
+      <stop offset="1" stop-color="#53B1FF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#ground)"/>
+
+  <!-- ===== LEFT: identity ===== -->
+  <g font-family="'Inter','Segoe UI',system-ui,sans-serif">
+    <!-- eyebrow -->
+    <text x="72" y="120" font-size="13" letter-spacing="3" fill="#6E7883">AI MEMORY LAYER · v1.0.0</text>
+
+    <!-- product name -->
+    <text x="72" y="196" font-size="52" font-weight="700" letter-spacing="-1.5" fill="#F2F5F8">HyperMEM</text>
+
+    <!-- value prop -->
+    <text x="72" y="252" font-size="20" font-weight="500" fill="#C7CFD8">The missing piece between chat and</text>
+    <text x="72" y="282" font-size="20" font-weight="500" fill="#C7CFD8">a character that <tspan fill="#53B1FF">remembers you</tspan>.</text>
+
+    <!-- meta -->
+    <text x="72" y="344" font-size="14" fill="#8A95A1" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">LLM-agnostic · REST + Python · worldIDA</text>
+    <text x="72" y="370" font-size="14" fill="#8A95A1" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">MIT · github.com/4biddencode/hypermem</text>
+  </g>
+
+  <!-- ===== RIGHT: the real context output ===== -->
+  <g>
+    <!-- panel -->
+    <rect x="632" y="104" width="560" height="400" rx="12" fill="url(#panel)" stroke="#232A31" stroke-width="1"/>
+
+    <!-- panel title bar -->
+    <rect x="632" y="104" width="560" height="44" rx="12" fill="#11151A"/>
+    <rect x="632" y="136" width="560" height="12" fill="#11151A"/>
+    <circle cx="656" cy="126" r="5" fill="#3A434D"/>
+    <circle cx="676" cy="126" r="5" fill="#3A434D"/>
+    <circle cx="696" cy="126" r="5" fill="#3A434D"/>
+    <text x="912" y="131" text-anchor="middle" font-size="12" letter-spacing="1" fill="#6E7883"
+          font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">context · get_context()</text>
+
+    <!-- the context output -->
+    <g font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">
+      <text x="664" y="192" font-size="14" fill="#53B1FF">[RELEVANT MEMORIES]</text>
+
+      <text x="684" y="226" font-size="14" fill="#C7CFD8">- My name is Emanuel, I live in Berlin</text>
+      <text x="684" y="250" font-size="14" fill="#8A95A1">  (importance: 100%)</text>
+
+      <text x="684" y="286" font-size="14" fill="#C7CFD8">- I'm planning a hike in the Alps next week</text>
+      <text x="684" y="310" font-size="14" fill="#8A95A1">  (importance: 80%)</text>
+
+      <text x="684" y="346" font-size="14" fill="#C7CFD8">- The vault password changed to "Midnight"</text>
+      <text x="684" y="370" font-size="14" fill="#8A95A1">  (importance: 90%)</text>
+
+      <text x="664" y="406" font-size="14" fill="#53B1FF">[/RELEVANT MEMORIES]</text>
+
+      <!-- recall checks -->
+      <text x="664" y="452" font-size="14" fill="#2FBF71">✓ "Where do I live?"</text>
+      <text x="664" y="476" font-size="14" fill="#2FBF71">✓ "What's the vault password?"</text>
+    </g>
+  </g>
+
+  <!-- ===== footer strip ===== -->
+  <line x1="72" y1="560" x2="1208" y2="560" stroke="#1C2127" stroke-width="1"/>
+  <text x="72" y="600" font-size="13" fill="#6E7883" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">pip install hypermem</text>
+  <text x="1208" y="600" font-size="13" fill="#6E7883" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" text-anchor="end">real model · real numbers · no mocks</text>
+</svg>

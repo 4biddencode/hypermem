@@ -10,6 +10,7 @@ LLM+lexical path.
 """
 
 import logging
+import time
 from typing import Optional
 import httpx
 
@@ -20,7 +21,8 @@ DEFAULT_EMBED_MODELS = {
     "openai": "text-embedding-3-small",
 }
 
-EMBED_TIMEOUT = 10.0
+EMBED_TIMEOUT = 30.0  # generous: a cold Ollama model load can exceed 10s
+EMBED_RETRY_SECONDS = 30.0  # backoff before retrying a transient embed failure
 
 
 def _embedding_url(provider: str, endpoint: Optional[str]) -> Optional[str]:
@@ -88,6 +90,7 @@ class EmbeddingClient:
         self._client: Optional[httpx.AsyncClient] = None
         self._url = _embedding_url(self.provider, endpoint)
         self._available: Optional[bool] = None  # lazily probed on first call
+        self._retry_at: float = 0.0  # monotonic ts after which transient errors retry
 
     @property
     def enabled(self) -> bool:
@@ -95,9 +98,20 @@ class EmbeddingClient:
 
     @property
     def available(self) -> bool:
-        """True when enabled and not yet known to be broken (unprobed counts
-        as available — the first call decides)."""
-        return self.enabled and self._available is not False
+        """True when enabled and worth calling right now.
+
+        Unprobed counts as available (the first call decides). A transient
+        failure (timeout / 5xx / cold model load) parks the client for a
+        short backoff window instead of disabling it forever — only a hard
+        client error (e.g. the model isn't installed) latches it off.
+        """
+        if not self.enabled:
+            return False
+        if self._available is False:
+            return False
+        if self._retry_at and time.monotonic() < self._retry_at:
+            return False
+        return True
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -121,6 +135,8 @@ class EmbeddingClient:
             return None
         if self._available is False:
             return None
+        if self._retry_at and time.monotonic() < self._retry_at:
+            return None
         try:
             client = await self._get_client()
             if self.provider == "ollama":
@@ -128,10 +144,11 @@ class EmbeddingClient:
                     "model": self.model, "prompt": text,
                 })
                 if resp.is_error:
-                    return self._fail(resp.status_code)
+                    return self._handle_error(resp.status_code)
                 data = resp.json()
                 vec = data.get("embedding")
                 self._available = True
+                self._retry_at = 0.0
                 return vec if isinstance(vec, list) else None
             if self.provider == "openai":
                 headers = {"Content-Type": "application/json"}
@@ -141,14 +158,30 @@ class EmbeddingClient:
                     "model": self.model, "input": text,
                 })
                 if resp.is_error:
-                    return self._fail(resp.status_code)
+                    return self._handle_error(resp.status_code)
                 data = resp.json()
                 vec = data.get("data", [{}])[0].get("embedding")
                 self._available = True
+                self._retry_at = 0.0
                 return vec if isinstance(vec, list) else None
         except Exception as e:  # timeout, connection error, bad payload
             logger.debug("embedding failure (%s): %s", self.provider, e)
-            return self._fail(0)
+            return self._transient()
+        return None
+
+    def _handle_error(self, status: int) -> None:
+        """4xx is permanent (bad config/missing model); 5xx is transient."""
+        if 400 <= status < 500:
+            return self._fail(status)
+        return self._transient()
+
+    def _transient(self) -> None:
+        """A failure that may clear up (server restart, cold model load, 5xx).
+        Park the client for a short backoff, then retry on the next call —
+        a cold Ollama model load can take longer than the HTTP timeout."""
+        logger.warning("embedding provider temporarily unavailable — semantic "
+                       "recall paused, will retry shortly (LLM+lexical for now)")
+        self._retry_at = time.monotonic() + EMBED_RETRY_SECONDS
         return None
 
     def _fail(self, status: int) -> None:

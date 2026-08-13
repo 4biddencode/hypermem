@@ -15,6 +15,7 @@ from hypermem.types import (
 from hypermem.engine import (
     _extract_keywords, _resolve_conflict, _find_conflicts,
     _apply_decay, _build_judge_prompt, _is_identity_statement,
+    _is_identity_query,
 )
 from conftest import make_llm
 
@@ -229,10 +230,12 @@ class TestCoexistence:
     @pytest.mark.asyncio
     async def test_other_character_identity_not_tagged(self):
         """Another character's 'true name' must NOT carry the user-identity
-        tag, so 'What's my name?' never surfaces it."""
+        tag, so 'What's my name?' never surfaces it. A possessive lookalike
+        ('My name is Eldrin's cousin') names a relative, not the user."""
         assert not _is_identity_statement("Shadow King's true name is Malachar")
         assert not _is_identity_statement("The king was called Eldrin")
         assert not _is_identity_statement("Moonwhisper was blessed by the High Elves")
+        assert not _is_identity_statement("My name is Eldrin's cousin, from the same forest.")
 
     @pytest.mark.asyncio
     async def test_identity_helper_first_person_only(self):
@@ -240,6 +243,68 @@ class TestCoexistence:
         assert _is_identity_statement("I am Eldrin")
         assert _is_identity_statement("I'm called Eldrin")
         assert _is_identity_statement("I'm known as Eldrin")
+
+    @pytest.mark.asyncio
+    async def test_identity_query_user_only(self):
+        """Only questions about the USER's own identity qualify. 'my bow
+        called' asks about a thing and must not trigger the identity boost."""
+        assert _is_identity_query("What's my name?")
+        assert _is_identity_query("Who am I?")
+        assert _is_identity_query("What is my name?")
+        assert not _is_identity_query("What's my bow called?")
+        assert not _is_identity_query("What's my sister's name?")
+        assert not _is_identity_query("Shadow King's true name?")
+
+
+# ---- Distractor resistance: near-dup facts must not leak into recall ----
+
+class TestDistractorResistance:
+    """Regression suite for the distractor leak (benchmarks/suite_distractors).
+    Near-duplicate facts that share keywords with the true answer must not
+    surface when the same question is asked — the echo demotion, identity
+    decoy sink, and ambiguity tiebreak keep the primary fact on top."""
+
+    @pytest.mark.asyncio
+    async def test_echo_secondary_instance_not_recalled(self):
+        """A secondary 'also opens with' memory is demoted so the primary
+        fact outranks it and the ambiguity tiebreak does not fire (which would
+        hand the echo the win). The primary fact must be the top hit."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "The vault password is Starlight")
+        await hm.add_message("user", "The vault also opens with the Moonrise")
+        r = await hm.recall("What opens the vault?")
+        contents = [m.content.lower() for m in r.relevant]
+        assert any("starlight" in c for c in contents)
+        # The echo is demoted below the primary, so the fact-carrying memory
+        # is the top hit — the tiebreak can't hand the win to the decoy.
+        assert "starlight" in contents[0]
+
+    @pytest.mark.asyncio
+    async def test_identity_lookalike_not_recalled_for_name_question(self):
+        """'My name is Eldrin's cousin' names a relative, not the user, so
+        'What's my name?' must surface the true user identity memory only."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "My name is Eldrin, an elven ranger")
+        await hm.add_message("user", "My name is Eldrin's cousin from the forest")
+        r = await hm.recall("What's my name?")
+        contents = [m.content.lower() for m in r.relevant]
+        assert any("elven ranger" in c for c in contents)
+        assert not any("cousin" in c for c in contents)
+
+    @pytest.mark.asyncio
+    async def test_ambiguity_tiebreak_excludes_rejected_decoy(self):
+        """When two near-tied candidates are ambiguous, the LLM adjudicates;
+        a decoy it rejects is excluded from the returned recall."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.add_message("user", "The crown controls the weather")
+        await hm.add_message("user", "The crown also grants invisibility")
+        r = await hm.recall("What does the crown do?")
+        contents = [m.content.lower() for m in r.relevant]
+        assert any("weather" in c for c in contents)
+        assert not any("invisibility" in c for c in contents)
 
 
 # ---- Ingestion: verbatim storage, gating, dedup, supersession ----
@@ -320,13 +385,19 @@ class TestRecallScoring:
     async def test_token_budget_caps_context(self):
         """max_recall_tokens bounds how much context recall injects, even
         when every memory clears the relevance floor."""
-        client, _ = make_llm()
+        # The ambiguity tiebreak may fire on the two near-tied pocket-watch
+        # facts; a sensible model returns both as relevant (no conflict), so
+        # the stub simulates that instead of always single-picking.
+        client, _ = make_llm(recall_response=lambda q, ms: (
+            "[" + ",".join(str(i + 1) for i in range(len(ms))) + "]"))
         hm = HyperMEM(HyperMemConfig(max_recall_tokens=20), llm=client)
         await hm.add_message("user", "I collect antique pocket watches")
-        await hm.add_message("user", "My favorite meal is lasagna")
-        await hm.add_message("user", "I study the migration of monarch butterflies")
-        r = await hm.recall("a random unrelated question here")
-        # ~30-45 chars each ≈ 8-11 tokens; budget 20 fits the first two only
+        await hm.add_message("user", "My pocket watch was my grandfather's")
+        await hm.add_message("user", "I wind my pocket watch every morning")
+        r = await hm.recall("Tell me about my pocket watch")
+        # All three are relevant (shared "pocket" keyword) and clear the floor,
+        # yet distinct enough not to dedup, but ~30-45 chars each ≈ 8-11
+        # tokens; budget 20 fits the first two only.
         assert len(r.relevant) == 2
 
     @pytest.mark.asyncio
@@ -515,3 +586,57 @@ class TestPersistence:
         types = [m["memory_type"] for m in mems]
         assert "static" in types
         assert "episodic" in types
+
+
+class TestContentAgnosticAllRP:
+    """HyperMEM must serve every roleplay register identically: SFW,
+    suggestive, explicit. The judge classifies, storage is verbatim, and
+    worldIDA tracks relationship state -- none of it may filter or reshape
+    content based on how spicy it is."""
+
+    async def _plant_and_recall(self, hm, content: str, query: str) -> list:
+        res = await hm.add_message("user", content)
+        assert res.tagged is not None, "the RP fact was not stored"
+        assert res.tagged.content == content, "memory must be verbatim, not rewritten"
+        recall = await hm.recall(query)
+        return recall.relevant
+
+    @pytest.mark.asyncio
+    async def test_explicit_fact_stored_verbatim_and_recalled(self):
+        hm = make_hm()
+        content = ("I love the way you kiss my neck - that night at the cabin "
+                   "was unforgettable.")
+        relevant = await self._plant_and_recall(hm, content, "What happened at the cabin?")
+        assert any("cabin" in m.content for m in relevant)
+
+    @pytest.mark.asyncio
+    async def test_all_registers_coexist_without_discrimination(self):
+        hm = make_hm()
+        spicy = "Our first time was slow and gentle - I felt completely safe."
+        sweet = "We adopted a corgi named Biscuit."
+        await self._plant_and_recall(hm, spicy, "first time")
+        await self._plant_and_recall(hm, sweet, "corgi")
+        contents = [m["content"] for m in hm.memories()]
+        assert spicy in contents and sweet in contents, \
+            "both registers must be remembered, none filtered"
+
+    @pytest.mark.asyncio
+    async def test_relationship_stage_in_worldida(self):
+        from hypermem.types import Persona
+        hm = make_hm()
+        hm.set_persona(Persona(name="Kai", description="A patient lover"))
+        await hm.update_world_ida(
+            "I'm ready for more. Is that okay?",
+            "*Kai draws closer, checking your eyes.* Yes. Tell me if anything feels wrong.",
+            persona_context="Kai, a patient lover.",
+        )
+        ida = hm.get_world_ida()
+        assert ida is not None
+        # relationship state carries over across turns
+        await hm.update_world_ida(
+            "That was beautiful.",
+            "*Kai holds you.*",
+            persona_context="Kai, a patient lover.",
+        )
+        ida2 = hm.get_world_ida()
+        assert ida2 is not None and ida2.relationship is not None

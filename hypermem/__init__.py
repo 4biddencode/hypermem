@@ -15,4 +15,4 @@ from .types import HyperMemConfig, HyperMem, RecallResult, AddMessageResult
 __all__ = [
     "HyperMEM", "HyperMemConfig", "HyperMem", "RecallResult", "AddMessageResult",
 ]
-__version__ = "0.1.0"
+__version__ = "1.0.0"

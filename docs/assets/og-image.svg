@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0B0D10"/>
+      <stop offset="1" stop-color="#0F1216"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14181D"/>
+      <stop offset="1" stop-color="#101317"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#ground)"/>
+
+  <!-- ===== LEFT: headline ===== -->
+  <g font-family="'Inter','Segoe UI',system-ui,sans-serif">
+    <text x="72" y="120" font-size="13" letter-spacing="3" fill="#6E7883">HYPERMEM · AI MEMORY LAYER · v1.0.0</text>
+
+    <text x="72" y="220" font-size="52" font-weight="700" letter-spacing="-1.5" fill="#F2F5F8">AI memory that</text>
+    <text x="72" y="282" font-size="52" font-weight="700" letter-spacing="-1.5" fill="#F2F5F8">never <tspan fill="#53B1FF">forgets</tspan>.</text>
+
+    <text x="72" y="346" font-size="18" fill="#C7CFD8" font-weight="400">The missing piece between chat and</text>
+    <text x="72" y="372" font-size="18" fill="#C7CFD8" font-weight="400">a character that remembers you.</text>
+
+    <text x="72" y="430" font-size="14" fill="#8A95A1" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">LLM-agnostic · REST + Python · worldIDA</text>
+  </g>
+
+  <!-- ===== RIGHT: the real context output ===== -->
+  <g>
+    <rect x="664" y="104" width="544" height="432" rx="12" fill="url(#panel)" stroke="#232A31" stroke-width="1"/>
+    <rect x="664" y="104" width="544" height="44" rx="12" fill="#11151A"/>
+    <rect x="664" y="136" width="544" height="12" fill="#11151A"/>
+    <circle cx="688" cy="126" r="5" fill="#3A434D"/>
+    <circle cx="708" cy="126" r="5" fill="#3A434D"/>
+    <circle cx="728" cy="126" r="5" fill="#3A434D"/>
+    <text x="936" y="131" text-anchor="middle" font-size="12" letter-spacing="1" fill="#6E7883"
+          font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">context · get_context()</text>
+
+    <g font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">
+      <text x="696" y="196" font-size="14" fill="#53B1FF">[RELEVANT MEMORIES]</text>
+
+      <text x="716" y="230" font-size="14" fill="#C7CFD8">- My name is Emanuel, I live in Berlin</text>
+      <text x="716" y="254" font-size="14" fill="#8A95A1">  (importance: 100%)</text>
+
+      <text x="716" y="290" font-size="14" fill="#C7CFD8">- I'm planning a hike in the Alps next week</text>
+      <text x="716" y="314" font-size="14" fill="#8A95A1">  (importance: 80%)</text>
+
+      <text x="716" y="350" font-size="14" fill="#C7CFD8">- The vault password changed to "Midnight"</text>
+      <text x="716" y="374" font-size="14" fill="#8A95A1">  (importance: 90%)</text>
+
+      <text x="716" y="410" font-size="14" fill="#C7CFD8">- Eldrin prefers the forest path at dusk</text>
+      <text x="716" y="434" font-size="14" fill="#8A95A1">  (importance: 70%)</text>
+
+      <text x="696" y="470" font-size="14" fill="#53B1FF">[/RELEVANT MEMORIES]</text>
+
+      <text x="696" y="512" font-size="14" fill="#2FBF71">✓ "Where do I live?"  →  answered from memory</text>
+    </g>
+  </g>
+</svg>

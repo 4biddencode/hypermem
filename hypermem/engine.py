@@ -224,13 +224,27 @@ def _apply_decay(mem: HyperMem) -> float:
     return mem.importance
 
 
+# Echo markers: a memory that frames its subject as secondary or additional
+# ("another crown", "the crown can *also* grant invisibility", "the other
+# key") describes a non-primary instance. When a primary fact about the same
+# thing matches the query better, the echo shouldn't crowd it out of context;
+# it stays recallable only when it is itself the best match.
+_ECHO_MARKER = re.compile(
+    r"\b(also|another|the other|separate|distinct)\b", re.I
+)
+
+
 def _is_identity_statement(text: str) -> bool:
     """True if a message reveals the USER's own identity.
 
     First-person patterns only ("my name is X", "I am X", "I'm called X"),
     so another character's name ("The king was called Eldrin", "Shadow
-    King's true name is Malachar") never gets the identity tag.
+    King's true name is Malachar") never gets the identity tag. A possessive
+    lookalike ("My name is Eldrin's cousin") is not naming yourself — it
+    names someone who belongs to you — so it never gets the tag either.
     """
+    if re.search(r"\bmy name is\s+\w+'s\b", text, re.I):
+        return False
     return bool(re.search(
         r"\bmy name\b|\bi (?:am|'m|was)\b|\bi'?m (?:called|known as)\b",
         text, re.I,
@@ -240,13 +254,16 @@ def _is_identity_statement(text: str) -> bool:
 def _is_identity_query(text: str) -> bool:
     """True when the query asks about the USER's own identity.
 
-    First-person only ("What's my name?", "Who am I?") so "my sister's name"
-    or "the king's name" never gets the identity boost.
+    The user must be the *subject* of the name/called question, not just a
+    word in it: "What's my name?" and "Who am I?" qualify; "What's my bow
+    called?", "my sister's name", and "the king's name" do not — they ask
+    about a thing or another person, never about the user.
     """
-    q = set(re.findall(r"[a-z0-9]{3,}", text.lower()))
-    return (bool({"name", "called", "known"} & q)
-            and bool(re.search(r"\b(my|me|mine|i)\b", text, re.I))
-            and not re.search(r"\bmy \w+'s\b", text, re.I))
+    return bool(re.search(
+        r"\bmy name\b|\bwho am i\b|\bwhat (?:am i|'m i|are we) called\b"
+        r"|\bwhat('s| is) my name\b",
+        text, re.I,
+    ))
 
 
 # ---- Main engine ----
@@ -649,13 +666,85 @@ class HyperMEM:
         scored.sort(key=lambda x: x[0], reverse=True)
         if not scored:
             return []
+
+        # Ambiguity tiebreak: when the leader doesn't clearly beat a close
+        # runner-up, the hybrid scorer can't tell a fact from a
+        # similar-sounding decoy ("There is a different bow called Starfall"
+        # vs the real bow). Ask the LLM to adjudicate the near-tied band:
+        # its picks get a boost, and the near-tied candidates it rejected are
+        # excluded from this recall. Fires only when the scores are genuinely
+        # close (``recall_ambiguity_gap``), so the embedding-fast path is
+        # untouched for unambiguous queries.
+        gap = self.config.recall_ambiguity_gap
+        if (len(scored) >= 2 and gap > 0
+                and scored[0][0] - scored[1][0] < gap):
+            # The near-tied band: the leader and anything within 0.2 of the
+            # runner-up, capped at 5 so the adjudication stays comparable but
+            # still contains the true fact when several distractors outrank it.
+            band = [m for score, m in scored
+                    if score >= scored[1][0] - 0.2][:5]
+            try:
+                picks = await self._llm.find_relevant(query, band, raw=True)
+                picked = {band[i].id for i in picks if i < len(band)}
+            except Exception:
+                picked = set()
+            if picked:
+                # The model compared the band and rejected the rest — they
+                # are decoys, keep them out of the context window.
+                decoys = {m.id for m in band if m.id not in picked}
+                scored = [(s, m) for s, m in scored if m.id not in decoys]
+                for i, (s, m) in enumerate(scored):
+                    if m.id in picked:
+                        scored[i] = (s + 1.5, m)
+                scored.sort(key=lambda x: x[0], reverse=True)
+
         # Relative relevance floor: the base importance + recency terms give
         # every memory a floor score, so without a cutoff an off-topic query
         # would surface the whole store. Drop memories scoring below half the
         # best (absolute floor 0.3) — a clearly-relevant memory still pulls
         # close neighbors with it, but unrelated noise falls out.
         floor = max(0.3, 0.5 * scored[0][0])
-        return [m for score, m in scored if score >= floor]
+        above_floor = []
+        for score, m in scored:
+            if score < floor:
+                continue
+            # Evidence gate: a memory with zero lexical overlap and only weak
+            # semantic similarity is scoring on its importance+recency
+            # baseline alone — that is not relevance ("The Ice King also
+            # wanted the crown" vs "Who killed my father?"), so drop it.
+            if self._has_evidence(m, q_tokens, q_emb):
+                above_floor.append(m)
+
+        # Diversity pass: never return two memories that say the same thing.
+        # A candidate that is a near-duplicate (embedding cosine above the
+        # ingest-dedup threshold) of one already chosen is dropped — the
+        # context window shouldn't carry both "My name is Eldrin" and its
+        # near-identical echo, and it keeps competing distractors from
+        # surfacing alongside the real fact.
+        kept: list[HyperMem] = []
+        for m in above_floor:
+            if any(_cosine(m.embedding, k.embedding) > 0.88
+                   for k in kept if m.embedding and k.embedding):
+                continue
+            kept.append(m)
+        return kept
+
+    @staticmethod
+    def _has_evidence(mem: HyperMem, q_tokens: set, q_emb) -> bool:
+        """True if a memory shares real evidence with the query.
+
+        Lexical keyword overlap, or strong semantic similarity, both count.
+        A memory with neither is scoring on its importance+recency baseline
+        alone — a standing score that no question earned it, so it never
+        surfaces. With no embedding signal available we don't over-filter.
+        """
+        m_tokens = set(re.findall(r"[a-z0-9]{3,}", mem.content.lower()))
+        m_tokens |= {kw.lower() for kw in (mem.keywords or [])}
+        if len(q_tokens & m_tokens) > 0:
+            return True
+        if q_emb is not None and mem.embedding:
+            return _cosine(q_emb, mem.embedding) >= 0.5
+        return True
 
     def _score_memory(self, query: str, mem: HyperMem, q_emb, q_tokens: set,
                       identity_query: bool, now: float) -> tuple[float, dict]:
@@ -669,19 +758,31 @@ class HyperMEM:
         imp = _apply_decay(mem)
         rec = max(0.0, 1.0 - (now - mem.created_at) / (30 * 86400))
         identity_boost = 0.0
+        echo_penalty = 0.0
         score = 2.0 * sim + 1.2 * lex + 0.5 * imp + 0.3 * rec
         if identity_query:
             if "name" in kwset or "identity" in kwset:
                 identity_boost = 1.5  # the user-identity memory surfaces
-            elif sim < 0.3 and lex == 0:
-                identity_boost = -0.5  # lookalike ("true name of ...") sinks
+            elif sim > 0.35:
+                # Any other memory close to an identity question is a
+                # lookalike ("My name is Eldrin's cousin…", "Shadow King's
+                # true name is Malachar") — it competes with the real identity
+                # but is never the answer, so sink it firmly.
+                identity_boost = -1.5
             score += identity_boost
+        elif _ECHO_MARKER.search(mem.content):
+            # A secondary-instance echo loses ground to the primary fact about
+            # the same subject — but only when it isn't itself the best match
+            # (a top-ranked echo still clears the floor it defines).
+            echo_penalty = -1.5
+            score += echo_penalty
         breakdown = {
             "cosine": round(sim, 4),
             "lexical": round(lex, 4),
             "importance": round(imp, 4),
             "recency": round(rec, 4),
             "identity_boost": identity_boost,
+            "echo_penalty": echo_penalty,
             "total": round(score, 4),
         }
         return score, breakdown

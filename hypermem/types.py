@@ -102,6 +102,8 @@ class HyperMemConfig:
     recall_use_llm: bool = False       # when embeddings are on, also run the LLM rank
     max_recall_tokens: int = 300       # context-window budget for recalled memories
     search_archive: bool = False       # whether decay-archived memories stay recallable
+    recall_ambiguity_gap: float = 0.7  # leader-to-runner-up score gap below which the
+                                       # LLM adjudicates near-tied candidates (0 = never)
     # ---- ingestion / lifecycle ----
     max_memory_chars: int = 1000       # verbatim content cap
     consolidation_threshold: int = 6   # episodic memories per subject before consolidation (0=off)
