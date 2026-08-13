@@ -339,8 +339,8 @@ class TestIngestion:
         storing a second copy."""
         client, _ = make_llm()
         hm = HyperMEM(HyperMemConfig(), llm=client)
-        await hm.add_message("user", "I live in Berlin")
-        r2 = await hm.add_message("user", "I live in Berlin")
+        await hm.add_message("user", "I live in Vienna")
+        r2 = await hm.add_message("user", "I live in Vienna")
         assert len(hm.state.active) == 1
         assert r2.tagged is hm.state.active[0]
         assert hm.state.active[0].access_count >= 1  # refreshed, not duplicated
@@ -420,10 +420,10 @@ class TestRecallScoring:
         mutate an unpacked tuple and never change the order)."""
         client, stub = make_llm(recall_response=lambda q, mems: "[]")
         hm = HyperMEM(HyperMemConfig(recall_use_llm=True), llm=client)
-        await hm.add_message("user", "I have a dog named Rex and he lives in Berlin")
+        await hm.add_message("user", "I have a dog named Rex and he lives in Vienna")
         r = await hm.recall("Where does Rex live?")
         assert len(r.relevant) == 1
-        assert "Berlin" in r.relevant[0].content
+        assert "Vienna" in r.relevant[0].content
         recall_calls = [c for c in stub.calls
                         if any("find memories relevant" in str(m.get("content", ""))
                                for m in c.get("messages", []))]

@@ -203,9 +203,9 @@ class TestEngineWiring:
         hm = HyperMEM(HyperMemConfig(llm_provider="openai", llm_model="gpt-4o-mini",
                                      llm_endpoint="https://api.openai.com",
                                      llm_api_key="sk-test"), llm=client)
-        result = await hm.add_message("user", "I live in Berlin")
+        result = await hm.add_message("user", "I live in Vienna")
         assert result.tagged is not None
-        assert "Berlin" in result.tagged.content
+        assert "Vienna" in result.tagged.content
 
     @pytest.mark.asyncio
     async def test_anthropic_world_ida_via_engine(self):

@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/badge/pypi-1.0.0-blue)](https://pypi.org/project/hypermem/)
 
 <p align="center">
-  <img src="docs/assets/banner.png" alt="HyperMEM — AI memory that never forgets" width="100%">
+  <img src="assets/banner.png" alt="HyperMEM — AI memory that never forgets" width="100%">
 </p>
 
 HyperMEM is a **memory layer** for AI applications — the missing piece
@@ -65,7 +65,7 @@ hm = HyperMEM()  # defaults: Ollama, qwen2.5:7b on localhost:11434
 
 async def main():
     # HyperMEM auto-tags important details as they arrive, stored verbatim
-    await hm.add_message("user", "My name is Emanuel, I live in Berlin")
+    await hm.add_message("user", "My name is Emanuel, I live in Vienna")
     await hm.add_message("user", "I'm planning a hike in the Alps next week")
 
     # Later, the relevant memories come back — even with different wording
@@ -82,7 +82,7 @@ Output:
 
 ```
 [RELEVANT MEMORIES]
-- My name is Emanuel, I live in Berlin (importance: 100%)
+- My name is Emanuel, I live in Vienna (importance: 100%)
 [/RELEVANT MEMORIES]
 ```
 
@@ -109,25 +109,11 @@ hypermem-server --port 8080 --llm-model qwen2.5:7b --llm-endpoint http://localho
 ```
 
 ```bash
-# Create a session
 curl -X POST localhost:8080/sessions -d '{"session_id": "rp1"}'
-
-# Feed it messages (returns anything newly tagged/recalled)
 curl -X POST localhost:8080/sessions/rp1/messages \
-  -d '{"role": "user", "content": "My name is Emanuel"}' \
-  -H "Content-Type: application/json"
-
-# Ask for context — memories + recent chat + world state
-curl "localhost:8080/sessions/rp1/context?message=What+is+my+name?"
-
-# Provenance: why does a memory exist, and why would it surface?
-curl "localhost:8080/sessions/rp1/memories/<memory_id>?query=What+is+my+name?"
-
-# Inspect everything it remembers
-curl localhost:8080/sessions/rp1/memories
-
-# Export the full session state
-curl localhost:8080/sessions/rp1/state
+  -d '{"role": "user", "content": "My name is Emanuel"}' -H "Content-Type: application/json"
+curl "localhost:8080/sessions/rp1/context?message=What+is+my+name?"   # memories + chat + world state
+curl "localhost:8080/sessions/rp1/memories/<id>?query=What+is+my+name?"  # provenance
 ```
 
 Endpoints: `GET /health`, `POST/GET/DELETE /sessions` (and `/sessions/{id}`),
@@ -138,9 +124,8 @@ Endpoints: `GET /health`, `POST/GET/DELETE /sessions` (and `/sessions/{id}`),
 `POST /sessions/{id}/world-ida/update`, `GET /sessions/{id}/state`.
 
 Sessions are auto-persisted to `--data-dir` (default `.hypermem_data/`) after
-every change — even auto-generated sessions persist from creation — and
-survive restarts. Concurrent writes are serialized per-session (no lost
-updates). API responses never leak raw embedding vectors.
+every change and survive restarts. Concurrent writes are serialized per-session
+(no lost updates). API responses never leak raw embedding vectors.
 
 ## worldIDA — live world state
 
@@ -224,18 +209,13 @@ config = HyperMemConfig(
     llm_model="qwen2.5:7b",
     llm_endpoint="http://localhost:11434",
     llm_api_key=None,               # required for openai/anthropic
-    # ---- recall ----
     embedding_provider="auto",      # "auto" | "ollama" | "openai" | "none"
     recall_use_llm=False,           # also run the LLM rank on top of embeddings
     max_recall_tokens=300,          # context-window budget for recalled memories
-    search_archive=False,           # include decay-archived memories in recall
-    # ---- ingestion / lifecycle ----
     auto_tag_threshold=0.4,         # minimum importance to store a fact
     max_active_memories=100,        # active mems before decay-archiving
-    max_memory_chars=1000,          # verbatim content cap
     consolidation_threshold=6,      # episodic mems per subject before consolidation (0=off)
     consolidation_interval=20,      # min messages between consolidation runs
-    max_context_messages=20,        # recent chat lines kept for context
     auto_tagging=True,              # set False to only store explicit remembers
 )
 hm = HyperMEM(config)
@@ -288,17 +268,20 @@ python benchmarks/diag_recall.py
 
 ### Results — v1.0.0, real Ollama, scales [100, 1000]
 
-> Latest run: `qwen2.5:7b` + `gemma3:12b` · see `benchmarks/benchmark_report_phase5.md`
+> Latest run: `qwen2.5:7b` + `gemma3:12b` · see `benchmarks/benchmark_report_full.md`
 
 | suite · metric | qwen2.5:7b | gemma3:12b |
 |---|---|---|
-| contradiction · new fact wins @100 | **1.0** | — |
-| contradiction · stale leak @100 | **0.0** | — |
-| paraphrase · recall @100 | **1.0** | — |
-| recall · pass@1 @100 | — | — |
-| distractor · accuracy @100 | — | — |
-| answer · hypermem @100 | — | — |
-| answer · hypermem+worldIDA @100 | — | — |
+| recall · pass@1 @100 | **1.0** | **1.0** |
+| recall · pass@1 @1000 | **1.0** | **1.0** |
+| distractor · accuracy @100 | **1.0** | **1.0** |
+| distractor · leaks @100 | **0.0** | **0.0** |
+| contradiction · new fact wins @100 | **1.0** | **1.0** |
+| contradiction · stale leak @100 | **0.0** | **0.0** |
+| paraphrase · recall @100 | **0.917** | **0.958** |
+| answer · hypermem @100 | **0.917** | **0.75** |
+| answer · hypermem+worldIDA @100 | **0.917** | **0.75** |
+| recall · latency @100 | **~137 ms** | ~833 ms |
 
 For the 0.1.0 baseline this was: gemma **0.0 everywhere** (judge JSON never
 parsed), qwen contradiction leak **1.0**, recall ≈ **0.57**, paraphrase ≈
@@ -321,8 +304,11 @@ examples/demo.py     self-contained end-to-end demo (public API only)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Source-available — free for personal use and commercial projects under
+10K ARR / 1K MAU; commercial license required above that. Attribution
+required when you use it. See [LICENSE](LICENSE) and contact
+hypermem@x5i.ch.
 
 <p align="center">
-  <img src="docs/assets/footer.png" alt="HyperMEM — LLM-agnostic memory layer" width="100%">
+  <img src="assets/footer.png" alt="HyperMEM — LLM-agnostic memory layer" width="100%">
 </p>

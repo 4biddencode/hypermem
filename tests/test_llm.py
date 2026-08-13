@@ -82,10 +82,10 @@ class TestRecallPipeline:
         """LLM returns [] but a memory shares keywords → still recalled."""
         client, _ = make_llm(recall_response=lambda q, mems: "[]")
         hm = HyperMEM(HyperMemConfig(embedding_provider="none"), llm=client)
-        await hm.add_message("user", "I have a dog named Rex and he lives in Berlin")
+        await hm.add_message("user", "I have a dog named Rex and he lives in Vienna")
         result = await hm.recall("Where does Rex live?")
         assert len(result.relevant) == 1
-        assert "Berlin" in result.relevant[0].content
+        assert "Vienna" in result.relevant[0].content
 
     @pytest.mark.asyncio
     async def test_no_overlap_no_recall(self):

@@ -17,6 +17,6 @@
   <!-- right: meta -->
   <g font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="13" fill="#6E7883">
     <text x="1208" y="80" text-anchor="end">LLM-agnostic · REST + Python · worldIDA</text>
-    <text x="1208" y="102" text-anchor="end">MIT · v1.0.0 · github.com/4biddencode/hypermem</text>
+    <text x="1208" y="102" text-anchor="end">v1.0.0 · github.com/4biddencode/hypermem</text>
   </g>
 </svg>

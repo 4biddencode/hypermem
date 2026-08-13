@@ -19,9 +19,21 @@ you'll get a clear message instead of a traceback.
 
 import argparse
 import asyncio
+import json
 import sys
 import time
 from pathlib import Path
+
+# The demo prints ✓/✗/·/—/→ which need UTF-8. Windows consoles default to
+# cp1252 and would raise UnicodeEncodeError on ✗ — force UTF-8 so the demo
+# runs cleanly anywhere (Windows Terminal, VS Code, POSIX).
+for _stream in (sys.stdout, sys.stderr):
+    reconfigure = getattr(_stream, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -213,7 +225,7 @@ async def demo(filler_count: int, model: str, endpoint: str,
         "*Eldrin checks his bow and nods.*", PERSONA,
     )
     ida = hm.get_world_ida()
-    print(f"  scene     {ida.scene.location} — {ida.scene.description}")
+    print(f"  scene     {ida.scene.location} — {ida.scene.ongoing_action}")
     print(f"  meta      turn {ida.meta.turn_count_in_scene}, "
           f"scene_changed={ida.meta.scene_changed}")
 
@@ -221,7 +233,7 @@ async def demo(filler_count: int, model: str, endpoint: str,
     heading("Closing")
     n_active = len(hm.state.active)
     n_archive = len(hm.state.archive)
-    kb = len(hm.to_dict().encode()) / 1024
+    kb = len(json.dumps(hm.to_dict()).encode()) / 1024
     print(f"  {hm.state.total_messages} messages processed → "
           f"{n_active} active + {n_archive} archived memories ({kb:.1f} KB state)")
     print(f"  public API used: add_message, recall, get_context, "
