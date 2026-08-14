@@ -5,7 +5,7 @@ Reviewed `hypermem/{engine,llm,embeddings,world_ida,server,types}.py`, `examples
 and the benchmarks. Findings below are ranked by severity. Each was verified against the
 actual code path (several reproduced with live runs against a stubbed LLM).
 
-**Status: all confirmed bugs are FIXED and verified (180 tests green).** Fixes noted inline.
+**Status: all confirmed bugs are FIXED and verified (191 tests green).** Fixes noted inline.
 
 ---
 
@@ -70,6 +70,86 @@ subtraction raise TypeError. **Fix (applied):** coerced to int at load.
   already coerces all text fields; no crash path.
 - `types.py:151` "stale memories share one module-level keywords list via setdefault" — real
   shared object, but no code path mutates `keywords` in place; no reachable wrong behavior.
+
+---
+
+## Round 3 — third review (11 confirmed findings, all FIXED)
+
+A third multi-agent workflow ran per-function reviewers with tiny schema-constrained output
+(small outputs defeat the model's 128k output-token cap that killed the engine/llm/server
+reviewers in rounds 1-2). It confirmed 11 new bugs — the first deep review of the never-reviewed
+`engine.py` persistence/ingestion paths and `llm.py`. All 11 are fixed and locked in with
+regression tests (191 total, up from 180). 14 of 17 reviewers and the completeness critic again
+died to the output cap, so the findings come from the 3 reviewers that completed plus adversarial
+verifiers, cross-checked against my own line-by-line read of the same modules.
+
+### R3-1. MEDIUM — `from_dict` leaves stale world state when the loaded dict omits it (`hypermem/engine.py:967`) — ✅ FIXED
+`from_dict` restored `_world_ida`/`_world_ida_store` only under `if "world_ida" in data` with no
+else-reset. Loading a save without world_ida keys (a session that never had one) kept the
+*previous* session's scene injected into context and used as the base for the next update.
+Reproduced: engine kept `'tavern'` after loading a keyless dict. **Fix (applied):** both are
+reset to `None` before the conditional restore.
+
+### R3-2. MEDIUM — `update_world_ida` re-remembers a scene transition on every failed turn (`hypermem/engine.py:656`) — ✅ FIXED
+On a failed update (timeout/429/parse/validate) `world_ida.update_world_ida` returns
+`previous_ida` unchanged but with `scene_changed=True`, so the engine stored a duplicate
+"Scene ended" pinned memory every failed turn until a success reset the flag. **Fix (applied):**
+the scene summary is recorded only when the update actually produced a *new* object
+(`new_ida is not old_ida`) with `scene_changed` — a failed update is an identity match and is
+skipped.
+
+### R3-3. MEDIUM — Scene-transition summaries stored pinned, importance 1.0, never pruned (`hypermem/engine.py:674`) — ✅ FIXED
+Auto scene summaries went through `remember()`, which pins (STATIC, importance 1.0) — pinned
+survives the archive cap and STATIC never decays, so N scene changes created N permanent
+full-score stale memories. **Fix (applied):** `remember()` gained `pinned`/`source` params; the
+scene summary is stored `pinned=False, source="auto"` so decay/archive/consolidation can prune
+it. The public `remember()` default stays pinned.
+
+### R3-4. MEDIUM — Identity boost applies to all `name`-tagged memories, letting a lookalike outrank the user (`hypermem/llm.py:508`) — ✅ FIXED
+`_keyword_fallback` added +5 to any memory with the "name" keyword, so a higher-importance
+lookalike ("My dog's name is Rex", imp 0.9) outranked the user identity ("My name is Emanuel",
+imp 0.6) for "What's my name?". **Fix (applied):** the boost now applies only to memories whose
+content is a first-person identity statement (`_is_identity_statement`, mirrored from the
+engine); lookalikes carrying the "name" keyword are sunk below it — consistent with the engine's
+`_score_memory` identity-query lookalike penalty.
+
+### R3-5. LOW — Identity boost never fires for "Who am I?" (zero overlap) (`hypermem/llm.py:504`) — ✅ FIXED
+The boost was inside `if overlap > 0:`, so a "Who am I?" query (tokens `{'who'}`) shared no token
+with the stored name and the identity memory was missed entirely. **Fix (applied):** the identity
+branch now runs regardless of overlap, giving even a zero-overlap identity memory a chance.
+
+### R3-6. LOW — `_is_filler` misses common filler variants (`hypermem/engine.py:392`) — ✅ FIXED
+The exact-match set mixed dotted/bare forms ("Yes." filtered but "Yes"/"Ok"/"Sure"/"Hi."/lowercase
+missed), so a filler could fire a judge call and get stored. **Fix (applied):** case and trailing
+punctuation are normalized to a canonical token set, expanded with common variants.
+
+### R3-7. LOW — Embedder auto-resolution reads config, not the injected LLM (`hypermem/engine.py:344`) — ✅ FIXED
+`__init__` passed `config.llm_provider/endpoint` to the EmbeddingClient for `auto`, ignoring the
+injected `self._llm`'s actual provider — an injected OpenAI-compatible LLM (config still defaulting
+to ollama) silently misrouted embeddings. **Fix (applied):** auto-resolution now reads
+`self._llm.provider/endpoint`.
+
+### R3-8. LOW — Consolidation fallback truncates event text, tail lost (`hypermem/engine.py:617`) — ✅ FIXED
+The fallback joined events and cut at `max_memory_chars`, then archived the originals with
+`superseded_by` — the truncated tail was unrecoverable even with `search_archive`. **Fix
+(applied):** a failed summary now skips the round and keeps the originals intact and searchable.
+
+### R3-9. LOW — `from_dict` worldIDA restore lacks an isinstance guard (`hypermem/engine.py:975`) — ✅ FIXED
+A corrupt list value for `world_ida` crashed the whole load (`_ida_from_dict` calls `.get` on a
+list). **Fix (applied):** the restore is guarded with `isinstance(dict)`.
+
+### R3-10. LOW — `_last_consolidation` restored via bare `int()` crashes on float-string (`hypermem/engine.py:973`) — ✅ FIXED
+`int("50.5")` raised ValueError, aborting load, unlike the tolerant `_as_int` used elsewhere.
+**Fix (applied):** coerced via `_as_int`.
+
+### R3-11. LOW — `save()` never fsyncs before the atomic rename (`hypermem/engine.py:992`) — ✅ FIXED
+A power loss between `os.replace` and the page-cache flush could leave the target empty with the
+old file gone, defeating the atomic-write durability claim. **Fix (applied):** `f.flush()` +
+`os.fsync(f.fileno())` before `os.replace`.
+
+### Refuted (not real, no change)
+- `llm.py:422` `judge()` parses with strict `json.loads` — dead/backcompat code with no callers;
+  production uses `extract_json_object` with a generous verbatim fallback, so no fact is lost.
 
 ---
 

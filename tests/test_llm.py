@@ -128,10 +128,11 @@ class TestKeywordFallback:
         assert LLMClient._keyword_fallback("quantum physics trivia", mems) == []
 
     def test_identity_boost_picks_user_identity(self):
-        """'What's my name?' must surface the identity-tagged memory (exact
-        'name' keyword), not the lookalike 'true name is Malachar' memory."""
+        """'What's my name?' must surface the user-identity memory — the one
+        whose content is a first-person name reveal — not the lookalike
+        'true name is Malachar' memory."""
         mems = [
-            HyperMem(id="1", content="Eldrin is an elven ranger from Silverwood.",
+            HyperMem(id="1", content="My name is Eldrin.",
                      created_at=time.time(), last_accessed_at=time.time(), access_count=0,
                      keywords=["eldrin", "name"], importance=0.8, source="auto"),
             HyperMem(id="2", content="Shadow King's true name is Malachar.",
@@ -144,7 +145,7 @@ class TestKeywordFallback:
 
     def test_identity_boost_not_needed_for_non_identity_query(self):
         mems = [
-            HyperMem(id="1", content="Eldrin is an elven ranger from Silverwood.",
+            HyperMem(id="1", content="My name is Eldrin.",
                      created_at=time.time(), last_accessed_at=time.time(), access_count=0,
                      keywords=["eldrin", "name"], importance=0.8, source="auto"),
             HyperMem(id="2", content="Shadow King's true name is Malachar.",
@@ -154,6 +155,49 @@ class TestKeywordFallback:
         ]
         idx = LLMClient._keyword_fallback("What's the Shadow King's name?", mems)
         assert idx[0] == 1
+
+    def test_identity_boost_not_stolen_by_lookalike_with_name_keyword(self):
+        """A higher-importance lookalike that merely carries the 'name' keyword
+        must NOT outrank — or even surface for — the user's own identity memory.
+        'My dog's name is Rex' names the dog, not the user, so 'What's my name?'
+        must return only 'My name is Emanuel' despite the dog memory's higher
+        importance, mirroring the engine's identity-query lookalike sink."""
+        mems = [
+            HyperMem(id="dog", content="My dog's name is Rex.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["dog", "name"], importance=0.9, source="auto"),
+            HyperMem(id="me", content="My name is Emanuel.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["emanuel", "name"], importance=0.6, source="auto"),
+        ]
+        idx = LLMClient._keyword_fallback("What's my name?", mems)
+        assert [mems[i].id for i in idx] == ["me"]
+
+    def test_identity_boost_fires_on_zero_overlap(self):
+        """'Who am I?' shares no token with the stored name, so the identity
+        memory must still surface even when its lexical overlap is 0."""
+        mems = [
+            HyperMem(id="me", content="My name is Emanuel.",
+                     created_at=time.time(), last_accessed_at=time.time(), access_count=0,
+                     keywords=["emanuel", "name"], importance=0.6, source="auto"),
+        ]
+        idx = LLMClient._keyword_fallback("Who am I?", mems)
+        assert [mems[i].id for i in idx] == ["me"]
+
+    def test_equal_overlap_ranks_higher_importance_first(self):
+        """When two memories share equal lexical overlap, the more important one
+        must rank first — the fallback sort was negating importance, so the
+        LEAST important memory surfaced first among ties."""
+        mems = [
+            HyperMem(id="low", content="I love hiking near the Alps", created_at=time.time(),
+                     last_accessed_at=time.time(), access_count=0, keywords=["alps"],
+                     importance=0.3, source="auto"),
+            HyperMem(id="high", content="The Alps are my favorite mountains", created_at=time.time(),
+                     last_accessed_at=time.time(), access_count=0, keywords=["alps"],
+                     importance=0.9, source="auto"),
+        ]
+        idx = LLMClient._keyword_fallback("tell me about the Alps", mems)
+        assert [mems[i].id for i in idx] == ["high", "low"]
 
 
 # ---- HTTP protocol level ----

@@ -541,6 +541,37 @@ class TestLifecycle:
         assert len(hm.state.archive) == 0
         assert len(hm.state.active) == 2
 
+    @pytest.mark.asyncio
+    async def test_consolidation_fallback_keeps_originals(self, monkeypatch):
+        """When the LLM summary fails, consolidation must skip the round and
+        keep the episodic originals intact and searchable — not join+truncate
+        them into a lossy memory and archive the originals (which would make
+        the truncated tail unrecoverable even with search_archive)."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(consolidation_threshold=2, consolidation_interval=1),
+                      llm=client)
+        original_complete = hm._llm.complete
+
+        async def failing_complete(messages, **kwargs):
+            # Only fail the consolidation summary call; let the judge work so
+            # the episodic memories actually get stored first.
+            prompt = messages[-1]["content"]
+            if "Summarize these episodic memories" in prompt:
+                return None
+            return await original_complete(messages, **kwargs)
+
+        monkeypatch.setattr(hm._llm, "complete", failing_complete)
+        await hm.add_message("user", "I journeyed to the black mountain")
+        await hm.add_message("user", "I climbed the black mountain")
+
+        # No consolidation happened: no static fused memory, originals intact.
+        assert not any(m.memory_type == MemoryType.STATIC for m in hm.state.active)
+        assert len(hm.state.archive) == 0
+        assert len(hm.state.active) == 2
+        contents = [m.content for m in hm.state.active]
+        assert any("journeyed" in c for c in contents)
+        assert any("climbed" in c for c in contents)
+
 
 # ---- Edge cases ----
 
@@ -655,6 +686,118 @@ class TestPersistence:
         types = [m["memory_type"] for m in mems]
         assert "static" in types
         assert "episodic" in types
+
+    def test_from_dict_clears_stale_world_ida(self):
+        """Loading a save that omits world_ida must clear any previously-loaded
+        world state — otherwise a stale previous session's scene leaks into this
+        one's context and becomes the base for the next update."""
+        from hypermem.world_ida import WorldIDA, Scene
+        hm = make_hm()
+        hm.set_world_ida(WorldIDA(scene=Scene(location="tavern")))
+
+        # A save with no world_ida keys (a session that never had one).
+        hm.from_dict({"conversation_id": "fresh", "active": [], "archive": [],
+                      "recent_messages": [], "total_messages": 0})
+        assert hm.get_world_ida() is None
+        assert hm._world_ida_store is None
+
+    def test_from_dict_tolerates_missing_and_bad_world_ida(self):
+        """A corrupt/foreign save must not crash the load: missing world_ida
+        keys default to None, a list value is ignored, and a float-string
+        _last_consolidation is coerced instead of raising."""
+        hm = make_hm()
+        # _last_consolidation as a float string would crash bare int().
+        hm.from_dict({
+            "conversation_id": "c", "active": [], "archive": [],
+            "recent_messages": [], "total_messages": 0,
+            "_last_consolidation": "50.5",
+            "world_ida": ["this is not a dict"],
+            "world_ida_store": "also not a dict",
+        })
+        assert hm._last_consolidation == 50
+        assert hm.get_world_ida() is None
+        assert hm._world_ida_store is None
+
+
+class TestFiller:
+    def test_filler_variants_filtered(self):
+        """Common filler variants — case and punctuation variants of the
+        canonical tokens — must be gated from storage, not stored as facts."""
+        hm = make_hm()
+        for filler in ["Yes", "yes.", "Ok", "OK!", "Sure", "Hi.", "hello",
+                       "No", "Maybe", "Alright", "Thanks", "lol"]:
+            assert hm._is_filler(filler), f"{filler!r} should be filler"
+        # Real content is not filler.
+        assert not hm._is_filler("My name is Emanuel")
+        assert not hm._is_filler("I moved to Berlin")
+
+
+class TestSceneTransitionMemory:
+    def test_scene_summary_unpinned_auto(self):
+        """A scene-transition summary is auto-generated, not user-explicit: it
+        must be unpinned (prunable by decay/archive/consolidation) and sourced
+        'auto', unlike a user's explicit remember() which stays pinned."""
+        hm = make_hm()
+        hm.remember("Scene ended: at the tavern.", pinned=False, source="auto")
+        mem = hm.memories()[0]
+        assert mem["pinned"] is False
+        assert mem["source"] == "auto"
+
+    def test_explicit_remember_stays_pinned(self):
+        """The public remember() default keeps user-explicit memories pinned."""
+        hm = make_hm()
+        hm.remember("The vault password is 1234")
+        mem = hm.memories()[0]
+        assert mem["pinned"] is True
+        assert mem["source"] == "user"
+
+
+class TestUpdateWorldOffline:
+    """update_world_ida must not store a scene-transition memory on a failed
+    update, and must store it (unpinned) only on a real transition."""
+
+    @pytest.mark.asyncio
+    async def test_failed_update_does_not_remember_scene_twice(self, monkeypatch):
+        """When the worldIDA update fails, `_update` returns the previous object
+        unchanged but with scene_changed still True. The engine must not store a
+        duplicate 'Scene ended' memory on every failed turn."""
+        from hypermem.world_ida import WorldIDA, Scene, Meta
+        import hypermem.world_ida as wida_mod
+
+        hm = make_hm()
+        old = WorldIDA(scene=Scene(location="tavern"), meta=Meta(scene_changed=True))
+        hm.set_world_ida(old)
+
+        # Simulate a failed update: returns the SAME object (scene_changed True).
+        async def fake_update(previous_ida, **kwargs):
+            return previous_ida
+
+        monkeypatch.setattr(wida_mod, "update_world_ida", fake_update)
+        await hm.update_world_ida("user msg", "ai msg")
+        # No scene-transition memory should have been stored.
+        assert hm.memories() == []
+
+    @pytest.mark.asyncio
+    async def test_real_transition_stores_unpinned_summary(self, monkeypatch):
+        from hypermem.world_ida import WorldIDA, Scene, Meta
+        import hypermem.world_ida as wida_mod
+
+        hm = make_hm()
+        old = WorldIDA(scene=Scene(location="tavern"), meta=Meta())
+        hm.set_world_ida(old)
+
+        async def fake_update(previous_ida, **kwargs):
+            # A real transition: a NEW object with scene_changed True.
+            return WorldIDA(scene=Scene(location="forest"),
+                            meta=Meta(scene_changed=True))
+
+        monkeypatch.setattr(wida_mod, "update_world_ida", fake_update)
+        await hm.update_world_ida("user msg", "ai msg")
+        mems = hm.memories()
+        assert len(mems) == 1
+        assert mems[0]["pinned"] is False
+        assert mems[0]["source"] == "auto"
+        assert "Scene ended" in mems[0]["content"]
 
 
 class TestContentAgnosticAllRP:

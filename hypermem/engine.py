@@ -341,13 +341,17 @@ class HyperMEM:
         from .embeddings import EmbeddingClient
         # Reuse the LLM's injected transport so tests can serve embeddings
         # through the same stub (production passes transport=None -> real HTTP).
+        # Auto-resolution follows the ACTUAL injected LLM, not the config: a
+        # caller that injects an OpenAI-compatible LLM (config still defaulting
+        # to ollama) must get an OpenAI embedder pointed at that LLM's endpoint,
+        # or embeddings silently hit the wrong provider and semantic recall dies.
         self._embedder = EmbeddingClient(
             provider=self.config.embedding_provider,
             model=self.config.embedding_model,
             endpoint=self.config.embedding_endpoint,
             api_key=self.config.embedding_api_key,
-            llm_provider=self.config.llm_provider,
-            llm_endpoint=self.config.llm_endpoint,
+            llm_provider=getattr(self._llm, "provider", self.config.llm_provider),
+            llm_endpoint=getattr(self._llm, "endpoint", self.config.llm_endpoint),
             transport=getattr(self._llm, "_transport", None),
         )
         self._last_consolidation = 0  # message-count throttle for consolidation
@@ -390,10 +394,16 @@ class HyperMEM:
     # ---- Public API ----
 
     def _is_filler(self, content: str) -> bool:
-        return content.strip() in {
-            "Ok.", "Hmm.", "I see.", "Yes.", "No.", "Maybe.", "Sure.",
-            "Wait.", "Oh.", "Right.", "Let's go.", "Alright.", "Cool.",
-            "Nice.", "Good.", "Hey", "Hi", "Hello", "Bye", "Thanks",
+        # Normalize case and trailing punctuation so "Yes", "yes.", "OK",
+        # "ok!", "Hi." all hit the same canonical token — the old exact-match
+        # against a mixed dotted/bare set let "Yes"/"Ok"/"Sure" slip through
+        # and get stored as memories.
+        token = content.strip().lower().rstrip(".,!?;: ")
+        return token in {
+            "ok", "okay", "hmm", "i see", "yes", "no", "maybe", "sure",
+            "wait", "oh", "right", "let's go", "alright",
+            "cool", "nice", "good", "hey", "hi", "hello", "bye", "thanks",
+            "thank you", "lol", "lmao", "haha", "ah", "uh", "um",
         }
 
     async def add_message(self, role: str, content: str,
@@ -613,8 +623,13 @@ class HyperMEM:
             parsed = extract_json_object(result) or {}
             summary = str(parsed.get("summary", "")).strip()
         if not summary:
-            # Fallback: keep the events verbatim rather than losing them.
-            summary = " ".join(m.content for m in oldest)[:self.config.max_memory_chars]
+            # No usable summary. The old fallback joined the events and cut
+            # them at max_memory_chars, then archived the originals with
+            # superseded_by — the truncated tail was then unrecoverable even
+            # with search_archive. Keeping the originals intact and searchable
+            # is strictly better than losing the tail, so skip this round and
+            # let a later turn retry.
+            return
 
         consolidation = HyperMem(
             id=_next_id(),
@@ -653,14 +668,36 @@ class HyperMEM:
             llm_complete=self._llm.complete,
         )
 
-        if old_ida is not None and new_ida.meta.scene_changed:
+        # Only record a scene transition when a real transition actually
+        # happened this turn. On a failed update (timeout/429/parse/validate)
+        # `_update` returns previous_ida unchanged but leaves scene_changed
+        # True, so without this identity check every failed turn would store a
+        # duplicate "Scene ended" pinned memory until a success resets the flag.
+        scene_ended = (
+            old_ida is not None
+            and new_ida is not old_ida
+            and new_ida.meta.scene_changed
+        )
+        if scene_ended:
             summary = scene_transition_summary(old_ida)
-            self.remember(summary)
+            # Auto-generated, not user-explicit: unpinned so decay/archive/
+            # consolidation can prune stale scene snapshots instead of letting
+            # every scene change accumulate a permanent full-score memory.
+            self.remember(summary, pinned=False, source="auto")
 
         self.set_world_ida(new_ida)
 
-    def remember(self, content: str, memory_type: MemoryType = MemoryType.STATIC) -> HyperMem:
-        """Explicitly tell HyperMEM to remember something."""
+    def remember(self, content: str, memory_type: MemoryType = MemoryType.STATIC,
+                 pinned: bool = True, source: str = "user") -> HyperMem:
+        """Explicitly tell HyperMEM to remember something.
+
+        ``pinned=True`` (the default) marks a user-explicit memory that must
+        never be archived or folded away. Internal auto-generated memories
+        (e.g. scene-transition summaries) pass ``pinned=False, source="auto"``
+        so decay/archive/consolidation can prune them — otherwise every scene
+        change would accumulate a permanent full-score memory that never ages
+        out.
+        """
         mem = HyperMem(
             id=_next_id(),
             content=content,
@@ -669,9 +706,9 @@ class HyperMEM:
             access_count=0,
             keywords=_extract_keywords(content),
             importance=1.0,
-            source="user",
+            source=source,
             memory_type=memory_type,
-            pinned=True,
+            pinned=pinned,
         )
         self.state.active.append(mem)
         return mem
@@ -966,14 +1003,24 @@ class HyperMEM:
 
     def from_dict(self, data: dict) -> None:
         """Restore the full engine state from a dict."""
-        from .world_ida import _ida_from_dict, WorldIDAStore
+        from .world_ida import _as_int, _ida_from_dict, WorldIDAStore
         self.state = state_from_dict(data)
         # Restore the consolidation throttle; default to 0 (from a pre-persist
         # save or hand-edited JSON) so consolidation is allowed from the start.
-        self._last_consolidation = int(data.get("_last_consolidation", 0) or 0)
-        if "world_ida" in data:
+        # _as_int tolerates a float-string ("50.5") that bare int() would crash
+        # on — consistent with the tolerant coercion used everywhere else when
+        # loading hand-edited JSON.
+        self._last_consolidation = _as_int(data.get("_last_consolidation", 0) or 0)
+        # Reset the world state first: loading a save that omits world_ida (a
+        # session that never had one) must clear any previously-loaded state,
+        # or a stale previous session's scene leaks into this one's context and
+        # becomes the base for the next update. Guard the restore with
+        # isinstance so a corrupt list value can't crash the whole load.
+        self._world_ida = None
+        self._world_ida_store = None
+        if isinstance(data.get("world_ida"), dict):
             self._world_ida = _ida_from_dict(data["world_ida"])
-        if "world_ida_store" in data:
+        if isinstance(data.get("world_ida_store"), dict):
             store = WorldIDAStore()
             store.from_dict(data["world_ida_store"])
             self._world_ida_store = store
@@ -989,6 +1036,13 @@ class HyperMEM:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self.to_dict(), f, indent=2)
+                # Flush + fsync before the atomic rename, or a power loss right
+                # after os.replace can leave the target empty/truncated with the
+                # old file already gone — the "atomic write" claim would be a
+                # lie about durability. fsync forces the page cache to disk so
+                # the rename only ever publishes fully-written content.
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, target)
         except Exception:
             try:

@@ -204,6 +204,26 @@ def extract_json_list(raw: str) -> Optional[list]:
     return None
 
 
+def _is_identity_statement(text: str) -> bool:
+    """True if text reveals the USER's own identity (first-person name reveal).
+
+    Mirrors engine._is_identity_statement. First-person patterns only ("my name
+    is X", "I am X", "I'm called X"), so another character's name ("The king
+    was called Eldrin", "Shadow King's true name is Malachar") never matches —
+    and neither does a possessive lookalike ("My dog's name is Rex", which
+    names the dog, not the user). "I am X" only counts when X is a capitalized
+    proper noun (a name), not a bare "I am tired".
+    """
+    if re.search(r"\bmy name is\s+\w+'s\b", text, re.I):
+        return False
+    if re.search(r"\b[Ii] (?:am|'m|was)\s+[A-Z][a-z]+\b", text):
+        return True
+    return bool(re.search(
+        r"\bmy name\b|\bi'?m\s+(?:called|known as)\b|\bi am\s+(?:called|known as)\b",
+        text, re.I,
+    ))
+
+
 def _extract_indices(raw: str) -> list[int]:
     """Parse 1-based memory indices out of an LLM recall response.
 
@@ -501,12 +521,24 @@ If no memory is relevant, return []."""
             kwset = {kw.lower() for kw in (mem.keywords or [])}
             haystack |= kwset
             overlap = len(q & haystack)
-            if overlap > 0:
-                # Identity questions ("What's my name?") must surface the
-                # user-identity memory (tagged with the exact "name" keyword),
-                # never a lookalike ("true name of ...").
-                if identity_query and ("name" in kwset or "identity" in kwset):
+            if identity_query:
+                # Identity questions ("What's my name?", "Who am I?") must
+                # surface the USER's own identity memory — the one whose content
+                # is a first-person name reveal ("My name is X", "I am X") —
+                # never a lookalike that merely carries the "name" keyword
+                # ("My dog's name is Rex", "Shadow King's true name is
+                # Malachar"). Boost only identity-statement memories, and give
+                # even a zero-overlap one a chance (a "Who am I?" query shares
+                # no token with the stored name). Lookalikes sink below it.
+                if _is_identity_statement(mem.content):
                     overlap += 5
-                scored.append((overlap, -mem.importance, -i, i))
+                elif "name" in kwset or "identity" in kwset:
+                    overlap -= 5
+            if overlap > 0:
+                # Sort by overlap desc, then importance desc — higher importance
+                # ranks first among ties. (The tuple is sorted reverse=True, so
+                # `mem.importance` not `-mem.importance`; the negation would
+                # rank the LEAST important memory first.)
+                scored.append((overlap, mem.importance, -i, i))
         scored.sort(reverse=True)
         return [i for *_, i in scored]
