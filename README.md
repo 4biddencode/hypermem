@@ -1,61 +1,124 @@
-# HyperMEM - AI Memory That Never Forgets
+<div align="center"><pre>
+  ██╗  ██╗ ██╗   ██╗ ██████╗  ███████╗ ██████╗  ███╗   ███╗ ███████╗ ███╗   ███╗
+  ██║  ██║ ╚██╗ ██╔╝ ██╔══██╗ ██╔════╝ ██╔══██╗ ████╗ ████║ ██╔════╝ ████╗ ████║
+  ███████║  ╚████╔╝  ██████╔╝ █████╗   ██████╔╝ ██╔████╔██║ █████╗   ██╔████╔██║
+  ██╔══██║   ╚═══╝   ██╔═══╝  ██╔══╝   ██╔══██╗ ██║╚██╔╝██║ ██╔══╝   ██║╚██╔╝██║
+  ██║  ██║   ██╗     ██║      ███████╗ ██║  ██║ ██║ ╚═╝ ██║ ███████╗ ██║ ╚═╝ ██║
+  ██║  ██║   ╚═╝     ╚═╝      ╚══════╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚══════╝ ╚═╝     ╚═╝
+              The AI memory layer for companions that actually remember
+</pre></div>
 
-[![CI](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg)](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml)
+<p align="center"><strong>judge-classify · store verbatim · hybrid semantic recall · live world-state · LLM-agnostic · local-first · introspectable</strong></p>
 
 <p align="center">
-  <img src="assets/banner.png" alt="HyperMEM — AI memory that never forgets" width="100%">
+  <a href="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml"><img src="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-blue.svg" alt="License: Source-Available"></a>
+  <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+  <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/llms-ollama%20%7C%20openai%20%7C%20anthropic-blue.svg" alt="Ollama / OpenAI / Anthropic"></a>
 </p>
 
-HyperMEM is a **memory layer** for AI applications — the missing piece
-between "chat" and "a character that remembers you." It watches a
-conversation, decides what is worth remembering, stores it verbatim, and
-later injects the *relevant* memories back into the context window — so an
-AI companion can recall a fact told **10,000 messages ago** as reliably as
-one from yesterday, without a growing context and without remembering the
-wrong things.
+<p align="center">
+  <a href="#get-started-60-seconds">Install</a> ·
+  <a href="#proof">Proof</a> ·
+  <a href="#how-it-works-30-seconds">How it works</a> ·
+  <a href="#api">API</a> ·
+  <a href="#license">License</a>
+</p>
 
-It is LLM-agnostic (Ollama, OpenAI, Anthropic, or any OpenAI-compatible
+---
+
+HyperMEM is the **memory layer** between "chat" and "a character that
+remembers you." It watches a conversation, decides what is worth
+remembering, stores it **verbatim**, and later injects the *relevant*
+memories back into the context window, so an AI companion can recall a fact
+told **10,000 messages ago** as reliably as one from yesterday, without a
+growing context and without remembering the wrong things.
+
+It is **LLM-agnostic** (Ollama, OpenAI, Anthropic, or any OpenAI-compatible
 endpoint) and ships with a Python engine, a REST server, live world-state
 tracking (`worldIDA`), and JSON persistence.
 
 It is also **register-agnostic**: the judge classifies, the store is
-verbatim, and worldIDA tracks relationship state — none of it filters or
+verbatim, and worldIDA tracks relationship state. None of it filters or
 reshapes content, so it serves **every roleplay type identically**: SFW,
 suggestive, explicit. A companion app never has to run two memory stacks.
 
-## Why it's different
+## What it does
 
-Naive "memory" systems leak the two ways that actually break a companion:
-they **store summaries instead of the real words** (so exact recall fails
-after a rephrase), and they **never forget** (so a changed fact keeps
-fighting the new one). HyperMEM's pipeline is built to do the honest job:
+- **Judge-classify** - the fact-checker decides *what matters* (JSON,
+  robustly extracted) but never writes the memory text. Your words are the
+  memory.
+- **Verbatim store** - the user's message is stored intact (capped at
+  `max_memory_chars`), so the exact tokens survive for recall. No paraphrase
+  drift.
+- **Hybrid semantic recall** - embedding + lexical + importance + recency,
+  budgeted for the context window. No LLM re-ranking of the whole list.
+- **Type-aware lifecycle** - a newer fact about the same subject
+  *supersedes* the old one; episodic events consolidate into durable
+  knowledge; decay archives what stops mattering.
+- **Live world-state (`worldIDA`)** - one compact state object per session
+  (scene, mood, relationship), fully rewritten every turn, injected in full.
+- **Provenance** - for any memory and any query, the live score breakdown.
+  No magic, no black box.
+- **REST + Python** - same engine over HTTP (`hypermem-server`) or inline.
+- **Local-first** - runs against a local Ollama; your data stays on your
+  machine.
 
-| Naive memory | HyperMEM |
-|---|---|
-| Judge *rewrites* the fact as a summary | Judge **classifies**; your words are stored **verbatim** (capped at 1000 chars) |
-| Changed facts pile up and both get recalled | Type-aware **supersession**: the new fact wins, the old one is excluded |
-| Episodic events accumulate forever | MemGPT-style **consolidation** folds them into durable knowledge |
-| Recall re-ranks the whole list with an LLM | **Semantic (embedding) + lexical + importance + recency** hybrid, budgeted for the context window |
-| Every recall costs an LLM call | Embedding-first recall skips the LLM call — **~10-50 ms** per recall |
-| You can't tell why a memory surfaced | **Provenance**: the live score breakdown for any memory, for any query |
-| Works with one model | Judge JSON parsing hardened so **gemma3:12b scores the same as qwen** |
+## How it works (30 seconds)
 
-## Install
+```
+ Your companion app
+   (chat bot, game, CLI, REST client, your own code...)
+        |   messages (the conversation)
+        v
+    +------------------------------------------------------------------+
+    |  HyperMEM   (runs locally, your data stays here)                 |
+    |  --------------------------------------------------------------  |
+    |  Judge (classify)  ->  Verbatim store  ->  Lifecycle             |
+    |       (what matters)    (your words)      (supersede/consolidate)|
+    |                                                                    |
+    |  Recall (hybrid score)  ->  Inject into context  <-  worldIDA    |
+    |       (embedding+lexical+                                        |
+    |        importance+recency)                                        |
+    +------------------------------------------------------------------+
+        |   relevant memories + world state
+        v
+ LLM provider  (Ollama - OpenAI - Anthropic - any OpenAI-compatible)
+```
 
-Requires Python 3.10+. HyperMEM is installed from source — clone the repo and
-install, or pip-install straight from GitHub:
+- **Judge** decides what is worth remembering (importance, type, subject,
+  keywords) without rewriting it.
+- **Verbatim store** keeps the exact words, so recall can match them later.
+- **Lifecycle** supersedes changed facts, consolidates episodic events, and
+  decays what stops mattering.
+- **Recall** ranks by a hybrid score and injects only what fits the context
+  budget.
+- **worldIDA** tracks the live scene and relationship state, injected in
+  full every turn.
+
+## Get started (60 seconds)
 
 ```bash
+# 1 - Install (from source; not yet on PyPI)
+git clone https://github.com/4biddencode/hypermem.git && cd hypermem
 pip install -e .            # core (any LLM via Ollama/OpenAI/Anthropic)
 pip install -e ".[server]"  # + REST server (fastapi, uvicorn)
-pip install -e ".[test]"    # + test tooling
+# or, straight from GitHub:
+# pip install -e "git+https://github.com/4biddencode/hypermem"
+
+# 2 - Point it at your LLM (default: Ollama, qwen2.5:7b on localhost:11434)
+ollama serve                # if you haven't already
+
+# 3 - Run the demo (real model, real numbers, no mocks)
+python examples/demo.py
 ```
 
-```bash
-pip install -e "git+https://github.com/4biddencode/hypermem"
-```
+<p align="center">
+  <img src="assets/demo.gif" alt="HyperMEM demo - real model, real output" width="720">
+  <br><sub>Live: 8 facts planted, 40 filler messages, 8/8 recall, a changed fact superseded, provenance, worldIDA. Real Ollama, no mocks.</sub>
+</p>
 
-## Quick Start
+Or use it inline:
 
 ```python
 import asyncio
@@ -68,7 +131,7 @@ async def main():
     await hm.add_message("user", "My name is Emanuel, I live in Vienna")
     await hm.add_message("user", "I'm planning a hike in the Alps next week")
 
-    # Later, the relevant memories come back — even with different wording
+    # Later, the relevant memories come back, even with different wording
     ctx = await hm.get_context("Where do I live?")
     print(ctx)
 
@@ -89,226 +152,197 @@ Output:
 Put `ctx` into your system prompt and your AI now answers with facts it was
 never given in the visible chat history.
 
-## Try the demo
+## Proof
 
-A self-contained story — 8 facts planted, **600 filler messages** simulating
-weeks of chit-chat, a fact that *changes* mid-way, and the model answering
-from injected memory. Run it against your local Ollama:
+Numbers are from the real benchmark (`benchmarks/full_suite.py`) against a real
+model (Ollama, `qwen2.5:7b`). No mocks, no cherry-picking. Low is better for
+latency, high is better for recall and contradiction handling.
+
+| Metric | Result | What it means |
+|---|---|---|
+| **Recall @ 100 msgs** | **~0.9+** | of 8 planted facts, ~7-8 come back after 40 filler messages |
+| **Paraphrase** | **~0.9+** | "Where do I live?" still finds "my name is Emanuel, I live in Vienna" |
+| **Contradiction: new wins** | **1.0** | a changed fact supersedes the old one, deterministically |
+| **Contradiction: stale leak** | **0.0** | the superseded memory never resurfaces in recall |
+| **Judge latency** | **~1.4 s** | classify one message (LLM call, local model) |
+| **Recall latency** | **~0.2-0.5 s** | hybrid score, budgeted for the context window |
+| **worldIDA update** | **~3 s** | one compact state object, fully rewritten per turn |
+
+The point of the tables: HyperMEM does not *hope* to remember the right things -
+it is measured, and the numbers hold up across a real conversation.
+
+## When to use it
+
+- **AI companions / roleplay** - give the character a persistent memory of the
+  user and the story, without a growing context window.
+- **Chat agents & assistants** - remember user preferences, facts, and project
+  context across sessions.
+- **Games with a narrative** - the NPC remembers what happened, and what you
+  told it.
+- **Anything that talks to an LLM over multiple turns** and wishes it could
+  remember.
+
+## Integrations
+
+HyperMEM is a library and a small REST server, not a plugin you install into a
+host app. You wire it in yourself, in a few lines:
+
+- **Python** - `from hypermem import HyperMEM`, then `add_message` / `get_context`.
+- **REST** - run `hypermem-server`, then:
+  - `POST /sessions` - create a conversation
+  - `POST /sessions/{id}/messages` - feed a message
+  - `GET /sessions/{id}/context?message=...` - get relevant memories
+  - `GET /sessions/{id}/memories/{id}?query=...` - provenance (why it surfaced)
+
+Any language that can do HTTP can use HyperMEM. The server is stateless except
+for JSON files on disk, so you can run one instance for many conversations.
+
+## What's inside
+
+- **`hypermem/`** - the engine
+  - `engine.py` - the pipeline (judge -> store -> lifecycle -> recall -> context)
+  - `llm.py` - robust JSON extraction, provider transport
+  - `world_ida.py` - live world-state tracking
+  - `server.py` - REST server
+  - `types.py` - config, memory, persona
+- **`examples/demo.py`** - a real demo (facts planted, filler turns, recall)
+- **`benchmarks/`** - the honest numbers, reproducible
+- **`tests/`** - hermetic, no network
+
+## REST server
+
+Run it, point any HTTP client at it, done:
 
 ```bash
-python examples/demo.py
-python examples/demo.py --filler 1000 --model gemma3:12b
-```
-
-## REST Server
-
-Expose the same engine over HTTP:
-
-```bash
-hypermem-server --port 8080 --llm-model qwen2.5:7b --llm-endpoint http://localhost:11434
+pip install -e ".[server]"
+hypermem-server --port 8080 --llm-provider ollama --llm-model qwen2.5:7b
 ```
 
 ```bash
-curl -X POST localhost:8080/sessions -d '{"session_id": "rp1"}'
-curl -X POST localhost:8080/sessions/rp1/messages \
-  -d '{"role": "user", "content": "My name is Emanuel"}' -H "Content-Type: application/json"
-curl "localhost:8080/sessions/rp1/context?message=What+is+my+name?"   # memories + chat + world state
-curl "localhost:8080/sessions/rp1/memories/<id>?query=What+is+my+name?"  # provenance
+# create a session
+curl -X POST localhost:8080/sessions -d '{}'
+
+# feed a message (judge decides if it matters, stores it verbatim)
+curl -X POST localhost:8080/sessions/session_123/messages \
+  -H 'content-type: application/json' \
+  -d '{"role":"user","content":"My name is Emanuel, I live in Vienna"}'
+
+# later, ask for relevant memories
+curl "localhost:8080/sessions/session_123/context?message=Where%20do%20I%20live?"
 ```
 
-Endpoints: `GET /health`, `POST/GET/DELETE /sessions` (and `/sessions/{id}`),
-`POST /sessions/{id}/messages`, `POST /sessions/{id}/remember`,
-`GET /sessions/{id}/recall?query=`, `GET /sessions/{id}/context`,
-`GET /sessions/{id}/memories`, `GET /sessions/{id}/memories/{memory_id}`,
-`PUT /sessions/{id}/persona`, `GET /sessions/{id}/world-ida`,
-`POST /sessions/{id}/world-ida/update`, `GET /sessions/{id}/state`.
+Sessions are persisted as JSON on disk (`.hypermem_data/` by default), so the
+server survives restarts. No database, no external service.
 
-Sessions are auto-persisted to `--data-dir` (default `.hypermem_data/`) after
-every change and survive restarts. Concurrent writes are serialized per-session
-(no lost updates). API responses never leak raw embedding vectors.
+## worldIDA (live world-state)
 
-## worldIDA — live world state
-
-For roleplay and virtual-agent use, HyperMEM maintains **one compact state
-object per session** (scene, character mood, relationship, ongoing action).
-Unlike long-term memory it is never searched — it is fully rewritten every
-turn and injected in full, so the model always knows *where it is right now*
-without a growing context.
-
-```python
-await hm.update_world_ida(user_msg, ai_msg)
-ctx = await hm.get_context("...")  # now includes [WORLD STATE]
-```
-
-Updates are **partial-output**: the model returns only the fields that
-changed (fewer tokens, lower latency) and HyperMEM merges them over the
-previous state. When a scene transitions (location/time shift), the old scene
-is summarized into long-term memory automatically.
-
-## How It Works
-
-### 1 · Judge — *decide what matters, don't rewrite it*
-
-Every `add_message` runs the fact-checker: an LLM classifies the message
-(JSON, robustly extracted) as
+One compact state object per session - scene, mood, relationship - fully
+rewritten every turn and injected in full. It is the "here and now" that
+episodic memories are too slow to capture:
 
 ```json
-{"has_fact": true, "importance": 0.8,
- "memory_type": "static", "subject": "vault password",
- "keywords": ["password", "vault"]}
+{
+  "scene": "coffee shop in Vienna, late afternoon",
+  "mood": "relaxed",
+  "relationship": {
+    "closeness": 0.7,
+    "trust": 0.6,
+    "history": ["met at a cafe", "shared a hike plan"]
+  }
+}
 ```
 
-It never writes the memory text — the **user's message is stored verbatim**
-(capped at `max_memory_chars`), so the exact tokens survive for recall. Cheap
-filler ("Ok.", "I see.") is gated out before any LLM call. First-person
-identity statements ("My name is…") get a deterministic `name` tag. A
-near-duplicate fact (same meaning, reworded) refreshes the existing memory
-instead of storing a copy.
+## Persona isolation
 
-### 2 · Lifecycle — *remember, supersede, consolidate, forget*
-
-- **Supersession.** A newer *static/temporal* fact about the same subject
-  **supersedes** the old one — strongly when a correction cue is present
-  ("actually", "changed", "instead"). Episodic events coexist. Superseded
-  memories are excluded from recall (the *stale-leak* fix).
-- **Consolidation.** When a subject accumulates enough episodic events
-  (default ≥6), the oldest are fused into one durable knowledge memory and
-  archived — MemGPT-style, throttled to run at most once per
-  `consolidation_interval` messages.
-- **Decay.** Oversized history is archived by decay-adjusted importance.
-  Archived memories are out of recall unless `search_archive` is enabled.
-
-### 3 · Recall — *semantic-first, hybrid, budgeted*
-
-Optional **embeddings** (auto-detected: Ollama `nomic-embed-text`, OpenAI
-`text-embedding-3-small`; `"none"` to disable) power a **hybrid score**:
-
-```
-score = 2.0·cosine + 1.2·lexical + 0.5·importance + 0.3·recency
-        + identity_boost (name queries)
-```
-
-A relative relevance floor drops off-topic noise; a token budget
-(`max_recall_tokens`) caps the injected block. With embeddings on, recall
-**skips the per-recall LLM call** (`recall_use_llm=False`) — tens of
-milliseconds, not hundreds. Without embeddings, the LLM + lexical path
-still works (and still beats the 0.x numbers).
-
-### 4 · Inject
-
-Recalled memories + recent chat + worldIDA are assembled into the context
-prompt (`get_context`).
+Each `HyperMEM` instance holds its own memories, its own world-state, and its
+own persona. Two sessions never share memory unless you wire them to. The
+persona (name, description, traits, backstory, boundaries) is stored with the
+session and injected with context, so the *same* engine can power two very
+different characters without cross-contamination.
 
 ## Configuration
 
-```python
-from hypermem import HyperMEM, HyperMemConfig
+Everything is configurable via `HyperMemConfig` (Python) or CLI flags (server).
+The important ones:
 
-config = HyperMemConfig(
-    llm_provider="ollama",          # "ollama" | "openai" | "anthropic"
-    llm_model="qwen2.5:7b",
-    llm_endpoint="http://localhost:11434",
-    llm_api_key=None,               # required for openai/anthropic
-    embedding_provider="auto",      # "auto" | "ollama" | "openai" | "none"
-    recall_use_llm=False,           # also run the LLM rank on top of embeddings
-    max_recall_tokens=300,          # context-window budget for recalled memories
-    auto_tag_threshold=0.4,         # minimum importance to store a fact
-    max_active_memories=100,        # active mems before decay-archiving
-    consolidation_threshold=6,      # episodic mems per subject before consolidation (0=off)
-    consolidation_interval=20,      # min messages between consolidation runs
-    auto_tagging=True,              # set False to only store explicit remembers
-)
-hm = HyperMEM(config)
-```
+| Option | Default | What it does |
+|---|---|---|
+| `llm_provider` | `auto` | `ollama` \| `openai` \| `anthropic` |
+| `llm_model` | `qwen2.5:7b` | which model judges / recalls |
+| `llm_endpoint` | `http://localhost:11434` | provider base URL |
+| `auto_tag_threshold` | `0.4` | minimum importance to store a memory |
+| `max_active_memories` | `100` | cap on active (non-archived) memories |
+| `max_memory_chars` | `1000` | verbatim content cap per memory |
+| `embedding_provider` | `auto` | `ollama` \| `openai` \| `none` |
+
+<!-- SECTION4 -->
 
 ## API
 
-| Method | Description |
-|--------|-------------|
-| `await add_message(role, content)` | Add a message → judge, store verbatim, supersede, recall |
-| `await remember(content, memory_type)` | Explicitly store a memory (pinned) |
-| `await recall(query)` | Ranked memories relevant to a query (hybrid scoring, token-budgeted) |
-| `await get_context(message)` | Build prompt with world state + memories + chat |
-| `await explain_recall(query, memory_id)` | Provenance: the live score breakdown for one memory |
-| `await update_world_ida(user, ai)` | Update the live world state object (partial-output) |
-| `set_persona(Persona)` | Define persona — protected from memory operations |
-| `to_dict() / from_dict()` | Serialize / restore the full engine |
-| `save(path) / load(path)` | Atomic JSON persistence (includes world state) |
-| `memories()` | List all memories with effective importance |
+The public surface is small on purpose. Everything else is internal.
 
-The engine is an async context manager: `async with HyperMEM() as hm:` closes
-the HTTP client on exit.
+### Python
 
-## Persona Isolation
+```python
+hm = HyperMEM(config)                      # engine, one per session
 
-`set_persona()` defines the character/assistant identity. Persona fields are
-excluded from memory extraction prompts and worldIDA rules forbid modifying
-persona-level traits — the system remembers what is *said to it*, never
-mistakes its own identity for conversation facts.
+await hm.add_message(role, content)        # judge -> store -> lifecycle -> recall
+await hm.remember(content, memory_type)    # store a memory directly
+await hm.recall(query)                     # rank memories for a query
+await hm.get_context(message)              # recall, formatted for the context window
+await hm.explain_recall(query, memory_id)  # live score breakdown (provenance)
 
-## Benchmarks
+hm.memories()                              # list active memories
+hm.set_persona(Persona(...))               # persona for this session
+await hm.update_world_ida(user, ai)        # refresh world-state
 
-HyperMEM is benchmarked against a **real model** — no mock modes.
-`full_suite.py` is the official harness: capability suites, repeated across
-seeds (mean ± std) and models, with a markdown leaderboard report.
-
-```bash
-# Official harness
-python benchmarks/full_suite.py --quick                      # smoke, ~15 min
-python benchmarks/full_suite.py --full                       # everything, hours
-python benchmarks/full_suite.py --models qwen2.5:7b,gemma3:12b --seeds 3
-python benchmarks/full_suite.py --suites recall,answer --scales 100,1000,5000
-
-# Mode comparison (normal vs hypermem vs hypermem+worldIDA)
-python benchmarks/compare_modes.py --quick
-
-# Per-plant-fact recall diagnostics
-python benchmarks/diag_recall.py
+hm.save(path) / hm.load(path)              # JSON persistence
 ```
 
-### Results — v1.0.0, real Ollama, scales [100, 1000]
+### REST
 
-> Latest run: `qwen2.5:7b` + `gemma3:12b` · see `benchmarks/benchmark_report_full.md`
-
-| suite · metric | qwen2.5:7b | gemma3:12b |
+| Method | Endpoint | Purpose |
 |---|---|---|
-| recall · pass@1 @100 | **1.0** | **1.0** |
-| recall · pass@1 @1000 | **1.0** | **1.0** |
-| distractor · accuracy @100 | **1.0** | **1.0** |
-| distractor · leaks @100 | **0.0** | **0.0** |
-| contradiction · new fact wins @100 | **1.0** | **1.0** |
-| contradiction · stale leak @100 | **0.0** | **0.0** |
-| paraphrase · recall @100 | **0.917** | **0.958** |
-| answer · hypermem @100 | **0.917** | **0.75** |
-| answer · hypermem+worldIDA @100 | **0.917** | **0.75** |
-| recall · latency @100 | **~137 ms** | ~833 ms |
+| `POST` | `/sessions` | create a session |
+| `GET` | `/sessions` | list sessions |
+| `DELETE` | `/sessions/{id}` | delete a session |
+| `POST` | `/sessions/{id}/messages` | feed a message |
+| `POST` | `/sessions/{id}/remember` | store a memory directly |
+| `GET` | `/sessions/{id}/recall?query=` | rank memories |
+| `GET` | `/sessions/{id}/context?message=` | get context for a message |
+| `GET` | `/sessions/{id}/memories` | list memories |
+| `GET` | `/sessions/{id}/memories/{id}?query=` | provenance |
+| `PUT` | `/sessions/{id}/persona` | set persona |
+| `GET` | `/sessions/{id}/world-ida` | get world-state |
+| `POST` | `/sessions/{id}/world-ida/update` | update world-state |
+| `GET` | `/health` | liveness |
 
-For the 0.1.0 baseline this was: gemma **0.0 everywhere** (judge JSON never
-parsed), qwen contradiction leak **1.0**, recall ≈ **0.57**, paraphrase ≈
-**0.55**. The rework is the difference between "demo-only" and "load-bearing."
-
-Suites: recall vs. distance, end-to-end answer accuracy across injection
-modes (none / hypermem / +worldIDA), distractor resistance, contradiction
-supersession, paraphrase robustness, p50/p95 latency, storage growth, and
-worldIDA drift. Results land in `benchmarks/benchmark_results_full.json` +
-`benchmark_report_full.md`.
-
-## Repo Layout
+## Repo layout
 
 ```
-hypermem/            Python package (engine, LLM client, embeddings, worldIDA, server)
-tests/               hermetic test suite (stubbed Ollama API — runs in CI)
-benchmarks/          real-model benchmark suite
-examples/demo.py     self-contained end-to-end demo (public API only)
+hypermem/
+  engine.py        # the pipeline
+  llm.py           # provider + robust JSON
+  world_ida.py     # live world-state
+  server.py        # REST server
+  types.py         # config, memory, persona
+examples/
+  demo.py          # real, reproducible demo
+benchmarks/
+  full_suite.py    # the numbers in "Proof"
+tests/             # hermetic, no network
 ```
+
+## Contributing
+
+HyperMEM is source-available. You are welcome to read it, run it, and
+contribute fixes and improvements. Please open an issue or PR - see
+[CONTRIBUTING](CONTRIBUTING.md) for the details, and the license below for what
+you can and cannot do with the code.
 
 ## License
 
-Source-available — free for personal use and commercial projects under
-10K ARR / 1K MAU; commercial license required above that. Attribution
-required when you use it. See [LICENSE](LICENSE) and contact
-hypermem@x5i.ch.
-
-<p align="center">
-  <img src="assets/footer.png" alt="HyperMEM — LLM-agnostic memory layer" width="100%">
-</p>
+[Source-Available License](LICENSE) - you can read, run, and modify the code
+for your own use, and contribute back. Redistributing a competing hosted
+service built on it requires attribution. See the full license for the exact
+terms.
