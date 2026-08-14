@@ -192,8 +192,9 @@ class TestDecayEdgeCases:
         )
         score_high = _apply_decay(mem_high)
         score_low = _apply_decay(mem_low)
-        # High access shouldn't be worse than low access
-        assert score_high >= 0
+        # High access should decay slower (score higher), never above stored importance
+        assert score_high > score_low
+        assert score_high <= 0.9
 
     def test_static_memory_never_archived_by_decay(self):
         """Static memories should never be archived due to decay alone."""

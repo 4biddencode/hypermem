@@ -83,15 +83,18 @@ class SessionStore:
     def create(self, session_id: Optional[str] = None) -> HyperMEM:
         if session_id and not _ID_RE.match(session_id):
             raise HTTPException(400, "session_id must match [A-Za-z0-9_-]{1,64}")
-        if session_id and session_id in self._sessions:
-            raise HTTPException(409, f"session '{session_id}' already exists")
-        sid = session_id or f"session_{int(time.time() * 1000)}"
-        hm = HyperMEM(self._config, llm=self._llm)
-        hm.state.conversation_id = sid
-        # Persist immediately for BOTH fixed and auto-generated ids, so an
-        # auto session survives a restart even before its first mutation.
-        self._write(sid, hm)
+        # Hold the lock across the existence check + write + insert so two
+        # concurrent create("foo") calls can't both pass the 409 check, both
+        # write foo.json, and the second silently replace the first.
         with self._lock:
+            if session_id and session_id in self._sessions:
+                raise HTTPException(409, f"session '{session_id}' already exists")
+            sid = session_id or f"session_{int(time.time() * 1000)}"
+            hm = HyperMEM(self._config, llm=self._llm)
+            hm.state.conversation_id = sid
+            # Persist immediately for BOTH fixed and auto-generated ids, so an
+            # auto session survives a restart even before its first mutation.
+            self._write(sid, hm)
             self._sessions[sid] = hm
         return hm
 

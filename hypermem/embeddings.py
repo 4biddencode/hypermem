@@ -57,6 +57,12 @@ def resolve_embedding_provider(provider: str, llm_provider: Optional[str],
     e = (llm_endpoint or "").lower()
     if "openai" in e:
         return "openai"
+    # A /v1 path is the OpenAI-compatible convention (vLLM, LM Studio, custom
+    # gateways). Treat it as OpenAI so an OpenAI-compatible gateway at
+    # http://gw:8000/v1 gets the OpenAI request schema instead of being
+    # misrouted to Ollama's /api/embeddings.
+    if e.startswith("http") and e.rstrip("/").endswith("/v1"):
+        return "openai"
     if e.startswith("http"):
         return "ollama"
     return "none"
@@ -159,7 +165,8 @@ class EmbeddingClient:
                 if resp.is_error:
                     return self._handle_error(resp.status_code)
                 data = resp.json()
-                vec = data.get("data", [{}])[0].get("embedding")
+                items = data.get("data", []) or []
+                vec = items[0].get("embedding") if items else None
                 self._available = True
                 self._retry_at = 0.0
                 return vec if isinstance(vec, list) else None

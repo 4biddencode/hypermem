@@ -83,8 +83,11 @@ def _resolve_conflict(existing: HyperMem, new_content: str,
     replaces the old fact. New episodic events always coexist, and a shared
     keyword alone never drops a memory (that was the "silently lost facts"
     bug). A correction only wins when the message carries an explicit
-    correction cue ("actually", "changed", "instead", …) AND the new fact's
-    keywords overlap the old memory.
+    correction cue ("actually", "changed", "instead", …) AND the new fact
+    either overlaps the old memory's keywords or shares its subject. The
+    subject match is what lets a value-change correction ("I live in Vienna"
+    -> "Actually, I moved to Berlin") supersede, since the new value's
+    keywords ("moved", "berlin") never appear in the old content.
 
     Args:
         existing: The currently stored memory.
@@ -111,9 +114,14 @@ def _resolve_conflict(existing: HyperMem, new_content: str,
 
     # The new fact must actually touch the old memory, not just be a
     # correction about some other topic that happens to share a stopword.
+    # Two paths count as "touching": the new keywords overlap the old
+    # content, OR the correction is about the same subject entity. The
+    # subject path is what makes a value-change correction supersede when
+    # the new value shares no words with the old one.
     shared = [kw for kw in new_keywords
               if kw and len(kw) >= 4 and kw in existing.content.lower()]
-    if not shared:
+    same_subject = bool(subject.strip()) and subject.strip().lower() == existing.subject.strip().lower()
+    if not shared and not same_subject:
         return False, None
 
     return True, HyperMem(
@@ -133,20 +141,28 @@ def _resolve_conflict(existing: HyperMem, new_content: str,
 
 
 def _find_conflicts(memories: list[HyperMem], new_keywords: list[str],
-                    new_content: str) -> list[int]:
+                    new_content: str, new_subject: str = "") -> list[int]:
     """Find memories that might conflict with new information.
 
-    Looks for memories sharing keywords with the new content.
+    A memory is a candidate if it shares a keyword with the new content OR
+    shares the same subject entity. The subject match matters for value-change
+    corrections: "I moved to Berlin" shares no keyword with "I live in Vienna",
+    but both are about the same subject, so the old memory must be surfaced for
+    supersession to have a chance.
     """
     conflicts = []
     new_lower = new_content.lower()
+    new_subject_l = new_subject.strip().lower()
     for i, mem in enumerate(memories):
-        # Check keyword overlap
+        # Keyword overlap is the primary signal.
         if any(kw in new_lower for kw in mem.keywords):
-            # Check if they're about the same topic (name, location, etc.)
             shared = set(kw for kw in mem.keywords if kw in new_lower)
             if len(shared) >= 1:
                 conflicts.append(i)
+                continue
+        # Same-subject is the fallback signal for value-change corrections.
+        if new_subject_l and mem.subject.strip().lower() == new_subject_l:
+            conflicts.append(i)
     return conflicts
 
 
@@ -230,11 +246,23 @@ def _apply_decay(mem: HyperMem) -> float:
     if mem.memory_type == MemoryType.STATIC:
         return mem.importance
 
-    if mem.memory_type == MemoryType.EPISODIC:
+    if mem.memory_type in (MemoryType.EPISODIC, MemoryType.TEMPORAL):
         hours_since_access = (time.time() - mem.last_accessed_at) / 3600
-        access_decay = 1.0 / (1.0 + 0.1 * mem.access_count)
-        time_decay = max(0.5, 1.0 - 0.01 * hours_since_access)
-        return mem.importance * access_decay * time_decay
+        if mem.memory_type == MemoryType.EPISODIC:
+            # Frequent access refreshes a memory: the more it has been recalled,
+            # the slower it decays (it is still "live"). The access count divides
+            # the effective age, so a heavily-used memory fades far more slowly
+            # than one touched once — never raising the result above the stored
+            # importance (time_decay stays <= 1.0).
+            effective_hours = hours_since_access / (1.0 + 0.1 * mem.access_count)
+        else:
+            # Temporal state (mood, current location) is transient: it ages out
+            # of the active store via the archive cap rather than accumulating
+            # as permanent clutter. No access-count boost — transient state
+            # shouldn't be kept alive just because it was recalled.
+            effective_hours = hours_since_access
+        time_decay = max(0.5, 1.0 - 0.01 * effective_hours)
+        return mem.importance * time_decay
 
     return mem.importance
 
@@ -458,7 +486,7 @@ class HyperMEM:
                         # correction of an ongoing attribute replaces the old
                         # fact; episodic events and topic overlaps coexist).
                         replaced = False
-                        for ci in _find_conflicts(self.state.active, keywords, mem_content):
+                        for ci in _find_conflicts(self.state.active, keywords, mem_content, subject):
                             existing = self.state.active[ci]
                             should_replace, replacement = _resolve_conflict(
                                 existing, mem_content, importance, mtype, subject, keywords)
@@ -771,7 +799,11 @@ class HyperMEM:
         m_tokens |= kwset
         lex = len(q_tokens & m_tokens) / max(1, len(q_tokens))
         imp = _apply_decay(mem)
-        rec = max(0.0, 1.0 - (now - mem.created_at) / (30 * 86400))
+        # Recency uses last_accessed_at (not created_at) so "recent" means
+        # "recently active", consistent with _apply_decay. A memory created
+        # long ago but recalled recently stays fresh instead of scoring low
+        # on its creation date.
+        rec = max(0.0, 1.0 - (now - mem.last_accessed_at) / (30 * 86400))
         identity_boost = 0.0
         echo_penalty = 0.0
         score = 2.0 * sim + 1.2 * lex + 0.5 * imp + 0.3 * rec

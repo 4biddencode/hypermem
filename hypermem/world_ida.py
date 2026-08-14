@@ -112,13 +112,50 @@ Output JSON:"""
 
 def _ida_from_dict(data: dict) -> WorldIDA:
     """Build WorldIDA from a dict (partial — missing fields get defaults)."""
+    meta = Meta(**{k: data.get("meta", {}).get(k) for k in Meta.__dataclass_fields__})
+    # Coerce the LLM's raw values so a small model emitting strings like
+    # "false" or "5" can't poison the typed state. bool("false") is True,
+    # which would otherwise flag a scene change every single turn.
+    meta.scene_changed = _as_bool(meta.scene_changed)
+    meta.turn_count_in_scene = _as_int(meta.turn_count_in_scene)
+    meta.last_updated_turn_index = _as_int(meta.last_updated_turn_index)
+    meta.confidence = _as_float(meta.confidence)
     return WorldIDA(
         scene=Scene(**{k: data.get("scene", {}).get(k) for k in Scene.__dataclass_fields__}),
         user=UserState(**{k: data.get("user", {}).get(k) for k in UserState.__dataclass_fields__}),
         character=CharacterState(**{k: data.get("character", {}).get(k) for k in CharacterState.__dataclass_fields__}),
         relationship=Relationship(**{k: data.get("relationship", {}).get(k) for k in Relationship.__dataclass_fields__}),
-        meta=Meta(**{k: data.get("meta", {}).get(k) for k in Meta.__dataclass_fields__}),
+        meta=meta,
     )
+
+
+def _as_bool(value) -> bool:
+    """Coerce an LLM-emitted value to a bool. Accepts bools and the common
+    string forms a model might emit ("true"/"false", "True"/"False", "1"/"0").
+    Anything unrecognized is False (safe default — never fabricate a change)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return False
+
+
+def _as_int(value, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default: float = 1.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _ida_to_dict(ida: WorldIDA) -> dict:
@@ -146,7 +183,14 @@ def _validate_ida(data: dict) -> bool:
     if not provided:
         return False
     for k in provided:
-        if not isinstance(data[k], dict):
+        section = data[k]
+        if not isinstance(section, dict):
+            return False
+        # Reject any field whose value is itself a dict/list/object. A
+        # malformed response like {"scene": {"location": {"coords": [1,2]}}}
+        # would otherwise pass, and world_ida_to_context_string crashes with
+        # TypeError when it joins a non-string element into the context.
+        if any(isinstance(v, (dict, list, set, tuple)) for v in section.values()):
             return False
     return True
 
@@ -215,6 +259,13 @@ async def update_world_ida(
             for section, fields in parsed.items():
                 if isinstance(fields, dict):
                     base.setdefault(section, {}).update(fields)
+            # scene_changed is a one-shot "this turn changed the scene" flag.
+            # It must never be carried forward from the previous state, or a
+            # turn that omits meta would re-flag a change and store a duplicate
+            # scene-transition memory. Default it to False unless this turn
+            # explicitly set it.
+            if "meta" not in parsed or "scene_changed" not in parsed.get("meta", {}):
+                base.setdefault("meta", {})["scene_changed"] = False
             new_ida = _ida_from_dict(base)
         else:
             new_ida = _ida_from_dict(parsed)
@@ -351,7 +402,15 @@ class WorldIDAStore:
             Dict of changes, or None if versions aren't available.
         """
         history = self._history.get(session_id, [])
-        if len(history) < max(abs(version_a), abs(version_b)):
+        n = len(history)
+        if n == 0:
+            return None
+        # Validate each index against the actual range so a positive index
+        # equal to len(history) (or out of range) returns None instead of
+        # raising IndexError. Negative indices count from the end.
+        def _in_range(idx: int) -> bool:
+            return -n <= idx < n
+        if not _in_range(version_a) or not _in_range(version_b):
             return None
 
         a = history[version_a]

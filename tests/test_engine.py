@@ -28,7 +28,7 @@ def make_hm(**kwargs) -> HyperMEM:
 
 
 def make_mem(content: str, memory_type: MemoryType = MemoryType.EPISODIC,
-             importance: float = 0.8) -> HyperMem:
+             importance: float = 0.8, subject: str = "") -> HyperMem:
     return HyperMem(
         id=f"test_{int(time.time() * 1000)}",
         content=content,
@@ -40,6 +40,7 @@ def make_mem(content: str, memory_type: MemoryType = MemoryType.EPISODIC,
         source="auto",
         memory_type=memory_type,
         pinned=False,
+        subject=subject,
     )
 
 
@@ -135,10 +136,20 @@ class TestDecay:
         assert score < 0.9  # Decayed
 
     def test_episodic_decays_with_access_count(self):
-        mem = make_mem("Frequently accessed", MemoryType.EPISODIC, importance=0.9)
-        mem.access_count = 50
-        score = _apply_decay(mem)
-        assert score < 0.9
+        # Frequent access refreshes a memory: a heavily-recalled memory decays
+        # slower than one accessed only once (same age), never above stored
+        # importance.
+        old_hours = 48
+        mem_frequent = make_mem("Frequent", MemoryType.EPISODIC, importance=0.9)
+        mem_frequent.access_count = 50
+        mem_frequent.last_accessed_at = time.time() - old_hours * 3600
+        mem_rare = make_mem("Rare", MemoryType.EPISODIC, importance=0.9)
+        mem_rare.access_count = 1
+        mem_rare.last_accessed_at = time.time() - old_hours * 3600
+        score_frequent = _apply_decay(mem_frequent)
+        score_rare = _apply_decay(mem_rare)
+        assert score_frequent > score_rare      # frequent access decays slower
+        assert score_frequent <= 0.9            # never above stored importance
 
 
 # ---- Contradiction resolution ----
@@ -152,6 +163,40 @@ class TestContradictionResolution:
         assert should_replace is True
         assert replacement is not None
         assert "Robert" in replacement.content
+
+    def test_static_supersedes_value_change_via_subject(self):
+        """A correction that changes the *value* supersedes via shared subject,
+        even when the new value's keywords never appear in the old content.
+        "I live in Vienna" -> "Actually, I moved to Berlin" shares no keyword
+        with the old fact, but both are about the same subject."""
+        existing = make_mem("I live in Vienna", MemoryType.STATIC, subject="user")
+        should_replace, replacement = _resolve_conflict(
+            existing, "Actually, I moved to Berlin", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["moved", "berlin"])
+        assert should_replace is True
+        assert replacement is not None
+        assert "Berlin" in replacement.content
+
+    def test_subject_match_without_correction_cue_never_supersedes(self):
+        """Same subject alone is not enough — the correction cue is still
+        required, so a new fact about the user never deletes an old one just
+        because they share the subject."""
+        existing = make_mem("I live in Vienna", MemoryType.STATIC, subject="user")
+        should_replace, replacement = _resolve_conflict(
+            existing, "I moved to Berlin", 0.8,
+            MemoryType.STATIC, subject="user", new_keywords=["moved", "berlin"])
+        assert should_replace is False
+        assert replacement is None
+
+    def test_subject_match_wrong_subject_never_supersedes(self):
+        """A correction about a different subject must not supersede, even with
+        a correction cue — the sibling's move doesn't overwrite the user's."""
+        existing = make_mem("I live in Vienna", MemoryType.STATIC, subject="user")
+        should_replace, replacement = _resolve_conflict(
+            existing, "Actually, my sister moved to Berlin", 0.8,
+            MemoryType.STATIC, subject="sister", new_keywords=["sister", "berlin"])
+        assert should_replace is False
+        assert replacement is None
 
     def test_episodic_appends(self):
         existing = make_mem("Went to the forest", MemoryType.EPISODIC)
