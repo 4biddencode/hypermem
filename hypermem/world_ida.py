@@ -57,6 +57,11 @@ class Meta:
     turn_count_in_scene: int = 0
     last_updated_turn_index: int = 0
     confidence: float = 1.0
+    # Narrative time: how many in-story days have passed since the start. Each
+    # day/night boundary (a night/evening -> morning/dawn time_of_day advance,
+    # or an explicit "next morning"/slept cue the LLM reports) increments it.
+    # The AI uses this to estimate elapsed story time ("in 3 weeks" ~ 21 days).
+    day_count: int = 0
 
 
 @dataclass
@@ -90,7 +95,7 @@ SCHEMA (field names):
   "user": {{"physical_state": ""}},
   "character": {{"physical_state": "", "appearance": null, "mood": "", "mood_trajectory": null, "energy_level": null}},
   "relationship": {{"stage": "", "trust_level": null, "unresolved_thread": null}},
-  "meta": {{"scene_changed": false, "turn_count_in_scene": 0, "last_updated_turn_index": 0, "confidence": 1.0}}
+  "meta": {{"scene_changed": false, "turn_count_in_scene": 0, "last_updated_turn_index": 0, "confidence": 1.0, "day_count": 0}}
 }}
 
 RULES:
@@ -101,6 +106,7 @@ RULES:
 5. If exchange contradicts previous state, trust the latest exchange but lower confidence.
 6. Never modify persona-level traits.
 7. Output ONLY valid JSON. No preamble, no explanation.
+8. day_count is how many in-story days have passed. Increment it by 1 when a new day begins in the story — a time skip ("the next morning", "three days later", "we slept"), a night->morning advance, or an explicit passage of time. If the story continues within the same day, leave day_count unchanged (omit it).
 
 Previous state: {previous_json}
 Persona: {ctx}
@@ -128,6 +134,7 @@ def _ida_from_dict(data: dict) -> WorldIDA:
     meta.turn_count_in_scene = _as_int(meta.turn_count_in_scene)
     meta.last_updated_turn_index = _as_int(meta.last_updated_turn_index)
     meta.confidence = _as_float(meta.confidence)
+    meta.day_count = _as_int(meta.day_count)
     return WorldIDA(
         scene=Scene(location=_text("scene", "location"),
                     sub_location=_text("scene", "sub_location") or None,
@@ -205,6 +212,55 @@ def _ida_to_dict(ida: WorldIDA) -> dict:
             return {k: _strip_none(v) for k, v in obj.items() if v is not None}
         return obj
     return _strip_none(d)
+
+
+# Narrative time-of-day buckets. A transition from a night-time bucket to a
+# morning bucket marks a new in-story day (a day/night boundary) — the signal
+# the day counter advances on, so the AI's sense of elapsed story time is
+# monotonic and can never drift backward.
+_NIGHT_BUCKETS = {"night", "midnight", "evening", "dusk", "late night"}
+_MORNING_BUCKETS = {"morning", "dawn", "sunrise", "day"}
+
+
+def _tod_bucket(time_of_day: str) -> Optional[str]:
+    """Classify a time_of_day string into a coarse bucket, or None if it's a
+    non-temporal value (a location, empty, or something unclassifiable)."""
+    t = (time_of_day or "").strip().lower()
+    if t in _NIGHT_BUCKETS:
+        return "night"
+    if t in _MORNING_BUCKETS:
+        return "morning"
+    # Heuristic: "afternoon"/"noon"/"midday" are within-day, not a boundary.
+    if any(w in t for w in ("afternoon", "noon", "midday", "mid-day")):
+        return "day"
+    return None
+
+
+def _advance_day_count(previous_ida, base: dict) -> int:
+    """Return the day_count for the merged state.
+
+    The day counter is monotonic — it only ever advances, never resets or
+    decreases — so the AI's estimate of elapsed story time is always internally
+    consistent (3 weeks never becomes "a few days"). It advances when:
+      - the LLM explicitly reports a higher day_count (a time skip it can see
+        in the narrative, e.g. "three days later"), OR
+      - a night/evening time_of_day advances to morning/dawn (a day/night
+        boundary the deterministic bucketing detects).
+    An explicit LLM day_count wins over the heuristic so a multi-day skip the
+    model calls out is honored even when the intermediate nights weren't seen.
+    """
+    prev_day = previous_ida.meta.day_count if previous_ida is not None else 0
+    merged_day = _as_int(base.get("meta", {}).get("day_count", 0) or 0)
+    if merged_day > prev_day:
+        return merged_day
+
+    prev_tod = previous_ida.scene.time_of_day if previous_ida is not None else ""
+    new_tod = base.get("scene", {}).get("time_of_day", "") if isinstance(base.get("scene"), dict) else ""
+    prev_bucket = _tod_bucket(prev_tod)
+    new_bucket = _tod_bucket(new_tod)
+    if prev_bucket == "night" and new_bucket == "morning":
+        return prev_day + 1
+    return prev_day
 
 
 def _validate_ida(data: dict) -> bool:
@@ -322,6 +378,18 @@ async def update_world_ida(
                     meta["turn_count_in_scene"] = 0
                 else:
                     meta["turn_count_in_scene"] = meta.get("turn_count_in_scene", 0) + 1
+            # Narrative day counter. This is the single source of truth for how
+            # much in-story time has passed, and it is monotonic — it only ever
+            # advances, never resets or decreases. That monotonicity is what
+            # keeps the AI's estimates internally consistent: once it has said
+            # "3 weeks", a later turn can never contradict it with "a few days",
+            # because day_count only grows. The LLM's explicit report (a time
+            # skip it can see, e.g. "three days later") wins over the heuristic;
+            # otherwise a night->morning time_of_day advance counts as one new
+            # day. Set the result on base so the merged state carries it.
+            base.setdefault("meta", {})["day_count"] = _advance_day_count(
+                previous_ida, base
+            )
             new_ida = _ida_from_dict(base)
         else:
             new_ida = _ida_from_dict(parsed)
@@ -399,6 +467,17 @@ def world_ida_to_context_string(ida: WorldIDA) -> str:
     # Ongoing action
     if ida.scene.ongoing_action:
         parts.append(f"Currently: {ida.scene.ongoing_action}.")
+
+    # Narrative time. The monotonic day_count is the single source of truth for
+    # how much in-story time has passed, so the AI can give consistent elapsed
+    # estimates ("3 weeks" never drifts to "a few days"). Omit it on day 0 (the
+    # opening scene) to avoid cluttering the context before any time has passed.
+    if ida.meta.day_count > 0:
+        elapsed = ida.meta.day_count - 1
+        if elapsed == 0:
+            parts.append(f"It is {ida.scene.time_of_day or 'a new day'} of day {ida.meta.day_count} — about a day has passed since the story began.")
+        else:
+            parts.append(f"It is {ida.scene.time_of_day or 'a new day'} of day {ida.meta.day_count} — roughly {elapsed} day{'s' if elapsed != 1 else ''} have passed since the story began.")
 
     return " ".join(parts)
 

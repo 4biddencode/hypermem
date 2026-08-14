@@ -442,3 +442,127 @@ def test_as_int_accepts_float_strings():
     assert _as_int(6.0) == 6
     assert _as_int("3") == 3
     assert _as_int("not a number") == 0  # genuinely bad input still defaults
+
+
+# ---- Narrative day counter ----
+#
+# The day_count is the single source of truth for elapsed in-story time. Its
+# defining property is monotonicity: it only ever advances, never resets or
+# decreases. That is what keeps the AI's time estimates internally consistent —
+# once it has said "3 weeks", a later turn can never contradict it with "a few
+# days", because day_count only grows. These tests pin the two advance signals
+# (explicit LLM time-skip, and the deterministic night->morning boundary) and
+# guard the monotonic invariant against drift and regression.
+
+class TestNarrativeDayCounter:
+    @pytest.mark.asyncio
+    async def test_starts_at_zero_on_fresh_init(self):
+        """A brand-new worldIDA (no previous state) starts on day 0."""
+        response = json.dumps({"scene": {"time_of_day": "morning"},
+                               "meta": {"day_count": 0}})
+        llm = StubLLM(response)
+        result = await update_world_ida(None, "Good morning.", "Morning!", llm_complete=llm)
+        assert result.meta.day_count == 0
+
+    @pytest.mark.asyncio
+    async def test_night_to_morning_advances_day(self):
+        """A night/evening time_of_day advancing to morning/dawn marks a new
+        in-story day — the day counter increments by exactly one."""
+        prev = make_ida()  # time_of_day="evening", day_count defaults to 0
+        response = json.dumps({"scene": {"time_of_day": "morning"}})
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "We slept.", "You wake up.", llm_complete=llm)
+        assert result.meta.day_count == 1
+
+    @pytest.mark.asyncio
+    async def test_same_day_no_advance(self):
+        """Staying within the same day must NOT advance the counter — the whole
+        point is that "later that day" is not a new day."""
+        prev = make_ida()  # evening
+        prev.meta.day_count = 2
+        response = json.dumps({"scene": {"time_of_day": "night"}})
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "Still talking.", "Yeah.", llm_complete=llm)
+        assert result.meta.day_count == 2  # night is not a boundary
+
+    @pytest.mark.asyncio
+    async def test_explicit_llm_time_skip_wins(self):
+        """When the LLM reports a jump (e.g. "three days later"), its explicit
+        day_count wins over the heuristic — a multi-day skip the model can see
+        in the narrative is honored even with no night->morning seen."""
+        prev = make_ida()  # evening, day_count 0
+        response = json.dumps({"meta": {"day_count": 3}})  # model says 3 days passed
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "Three days later...", "It's been days.", llm_complete=llm)
+        assert result.meta.day_count == 3
+
+    @pytest.mark.asyncio
+    async def test_explicit_lower_never_decreases(self):
+        """Monotonic invariant: an explicit day_count BELOW the current value
+        must not decrease the counter. The story's elapsed time can never go
+        backwards — that would let "3 weeks" become "a few days"."""
+        prev = make_ida()
+        prev.meta.day_count = 5
+        response = json.dumps({"meta": {"day_count": 2}})  # model misreports lower
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "Hello.", "Hi!", llm_complete=llm)
+        assert result.meta.day_count == 5  # clamped to the prior value
+
+    @pytest.mark.asyncio
+    async def test_carries_forward_when_omitted(self):
+        """A compact output that omits day_count must carry the prior value
+        forward, not reset it to 0."""
+        prev = make_ida()
+        prev.meta.day_count = 4
+        response = json.dumps({"meta": {"scene_changed": False}})  # no day_count
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "Hello.", "Hi!", llm_complete=llm)
+        assert result.meta.day_count == 4  # preserved
+
+    @pytest.mark.asyncio
+    async def test_multiple_nights_accumulate(self):
+        """Sequential night->morning crossings accumulate: each new day adds
+        one, so after several story-days the counter reflects the total."""
+        prev = make_ida()  # evening
+        prev.meta.day_count = 0
+        for i in range(1, 4):
+            # Each cycle: evening -> (night) -> morning. The merge only sees the
+            # morning output, but the previous state's time_of_day is "evening",
+            # so each crossing is a night->morning boundary and advances by one.
+            response = json.dumps({"scene": {"time_of_day": "morning"}})
+            llm = StubLLM(response)
+            prev = await update_world_ida(prev, "Slept.", "Morning.", llm_complete=llm)
+            assert prev.meta.day_count == i
+            # Reset time_of_day back to evening so the next iteration is again a
+            # night->morning boundary (morning->morning would not advance).
+            prev.scene.time_of_day = "evening"
+        assert prev.meta.day_count == 3
+
+    @pytest.mark.asyncio
+    async def test_scene_change_within_day_keeps_count(self):
+        """A scene change (new location) that is NOT a day boundary must keep the
+        same day_count — time-of-day is what advances the day, not location."""
+        prev = make_ida()
+        prev.meta.day_count = 2
+        response = json.dumps({"scene": {"location": "forest"},
+                               "meta": {"scene_changed": True}})
+        llm = StubLLM(response)
+        result = await update_world_ida(prev, "Let's go to the forest.", "We walk in.", llm_complete=llm)
+        assert result.meta.day_count == 2  # location change, same day
+
+    def test_context_string_surfaces_narrative_time(self):
+        """Once the counter advances, the context string tells the AI the day
+        and elapsed time, so it can give consistent estimates."""
+        ida = make_ida()
+        ida.meta.day_count = 3
+        s = world_ida_to_context_string(ida)
+        assert "day 3" in s
+        assert "2 days" in s  # day 3 means ~2 days elapsed
+
+    def test_context_string_omits_day_zero(self):
+        """Day 0 (opening scene, no time passed) must not clutter the context
+        with a narrative-time line."""
+        ida = make_ida()  # day_count defaults to 0
+        s = world_ida_to_context_string(ida)
+        assert "day " not in s
+        assert "days" not in s
