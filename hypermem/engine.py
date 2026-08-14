@@ -2,6 +2,7 @@
 import time
 import re
 import logging
+from functools import lru_cache
 from typing import Optional
 from .types import (
     Message, HyperMem, HyperMemState, HyperMemConfig, MemoryType, Persona,
@@ -13,6 +14,20 @@ from .embeddings import cosine as _cosine
 logger = logging.getLogger("hypermem")
 
 _mem_id_counter = 0
+
+_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+
+
+@lru_cache(maxsize=4096)
+def _tokens_of(text: str) -> frozenset:
+    """Lowercased content words of a memory, cached by content.
+
+    Memory content is immutable after storage, so the token set is stable.
+    Caching it avoids re-running the regex over every memory on every recall,
+    which dominates scoring cost once the store grows past a few hundred
+    memories.
+    """
+    return frozenset(_TOKEN_RE.findall(text.lower()))
 
 
 def _next_id() -> str:
@@ -738,7 +753,7 @@ class HyperMEM:
         alone — a standing score that no question earned it, so it never
         surfaces. With no embedding signal available we don't over-filter.
         """
-        m_tokens = set(re.findall(r"[a-z0-9]{3,}", mem.content.lower()))
+        m_tokens = set(_tokens_of(mem.content))
         m_tokens |= {kw.lower() for kw in (mem.keywords or [])}
         if len(q_tokens & m_tokens) > 0:
             return True
@@ -751,7 +766,7 @@ class HyperMEM:
         """Hybrid score for one memory against a query, with the component
         breakdown (shared by ranking and by the provenance endpoint)."""
         sim = _cosine(q_emb, mem.embedding) if mem.embedding else 0.0
-        m_tokens = set(re.findall(r"[a-z0-9]{3,}", mem.content.lower()))
+        m_tokens = set(_tokens_of(mem.content))
         kwset = {kw.lower() for kw in (mem.keywords or [])}
         m_tokens |= kwset
         lex = len(q_tokens & m_tokens) / max(1, len(q_tokens))
