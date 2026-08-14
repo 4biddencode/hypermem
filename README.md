@@ -1,7 +1,6 @@
 # HyperMEM - AI Memory That Never Forgets
 
 [![CI](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg)](https://github.com/4biddencode/hypermem/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/badge/pypi-1.0.0-blue)](https://pypi.org/project/hypermem/)
 
 <p align="center">
   <img src="assets/banner.png" alt="HyperMEM — AI memory that never forgets" width="100%">
@@ -24,10 +23,6 @@ verbatim, and worldIDA tracks relationship state — none of it filters or
 reshapes content, so it serves **every roleplay type identically**: SFW,
 suggestive, explicit. A companion app never has to run two memory stacks.
 
-```
-pip install hypermem
-```
-
 ## Why it's different
 
 Naive "memory" systems leak the two ways that actually break a companion:
@@ -47,12 +42,17 @@ fighting the new one). HyperMEM's pipeline is built to do the honest job:
 
 ## Install
 
-Requires Python 3.10+.
+Requires Python 3.10+. HyperMEM is installed from source — clone the repo and
+install, or pip-install straight from GitHub:
 
 ```bash
 pip install -e .            # core (any LLM via Ollama/OpenAI/Anthropic)
 pip install -e ".[server]"  # + REST server (fastapi, uvicorn)
 pip install -e ".[test]"    # + test tooling
+```
+
+```bash
+pip install -e "git+https://github.com/4biddencode/hypermem"
 ```
 
 ## Quick Start

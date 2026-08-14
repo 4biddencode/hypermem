@@ -72,6 +72,6 @@
 
   <!-- ===== footer strip ===== -->
   <line x1="72" y1="560" x2="1208" y2="560" stroke="#1C2127" stroke-width="1"/>
-  <text x="72" y="600" font-size="13" fill="#6E7883" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">pip install hypermem</text>
+  <text x="72" y="600" font-size="13" fill="#6E7883" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace">pip install -e "git+https://github.com/4biddencode/hypermem"</text>
   <text x="1208" y="600" font-size="13" fill="#6E7883" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" text-anchor="end">real model · real numbers · no mocks</text>
 </svg>

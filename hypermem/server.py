@@ -5,7 +5,7 @@ tools) can use persistent AI memory without writing Python.
 
 Run with ``python -m hypermem.server`` or the ``hypermem-server`` script.
 
-Requires the optional extra: ``pip install hypermem[server]``.
+Requires the optional extra (installed from source): ``pip install -e ".[server]"``.
 """
 
 import argparse
