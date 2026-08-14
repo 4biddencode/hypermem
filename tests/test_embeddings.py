@@ -66,3 +66,57 @@ async def test_disabled_provider_never_calls():
     assert ec.enabled is False
     assert ec.available is False
     assert await ec.embed("hello") is None
+
+
+# ---- Round-2 findings ----
+
+@pytest.mark.asyncio
+async def test_null_embedding_does_not_mark_available():
+    """A 200 with a null/missing embedding is not a valid success — the client
+    must not latch available, or the engine would hammer the endpoint every
+    recall with no backoff."""
+    ec = make_ec(lambda r: httpx.Response(200, json={"embedding": None}))
+    assert await ec.embed("hello") is None
+    assert ec._available is None  # never marked available
+    assert ec.available is True   # still unprobed -> allowed to retry
+
+
+@pytest.mark.asyncio
+async def test_429_is_transient_not_permanent():
+    """A 429 rate limit parks the client briefly instead of disabling semantic
+    recall for the process lifetime — it must recover after backoff."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, json={"embedding": [1.0]})
+
+    ec = make_ec(handler)
+    assert await ec.embed("hello") is None
+    assert ec._available is not False   # not permanently broken
+    assert ec.available is False        # inside the backoff window
+    ec._retry_at = 0                    # backoff elapses
+    assert await ec.embed("hello") == [1.0]
+    assert ec.available is True
+
+
+def test_auto_openai_inherits_llm_endpoint():
+    """Auto-detected OpenAI from an llm_endpoint=/v1 gateway must not default
+    to api.openai.com — it should inherit the LLM endpoint as the embed URL."""
+    ec = EmbeddingClient(
+        provider="auto", llm_provider=None, llm_endpoint="http://gw:8000/v1",
+    )
+    assert ec.provider == "openai"
+    assert ec._url == "http://gw:8000/v1/embeddings"
+
+
+def test_explicit_embedding_endpoint_wins_over_llm():
+    """An explicit embedding_endpoint overrides the inherited LLM endpoint."""
+    ec = EmbeddingClient(
+        provider="auto", endpoint="http://embed.local:8000/v1",
+        llm_provider=None, llm_endpoint="http://gw:8000/v1",
+    )
+    assert ec.provider == "openai"
+    assert ec._url == "http://embed.local:8000/v1/embeddings"

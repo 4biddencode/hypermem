@@ -5,7 +5,71 @@ Reviewed `hypermem/{engine,llm,embeddings,world_ida,server,types}.py`, `examples
 and the benchmarks. Findings below are ranked by severity. Each was verified against the
 actual code path (several reproduced with live runs against a stubbed LLM).
 
-**Status: all confirmed bugs are FIXED and verified (169 tests green).** Fixes noted inline.
+**Status: all confirmed bugs are FIXED and verified (180 tests green).** Fixes noted inline.
+
+---
+
+## Round 2 — second independent review (9 confirmed findings, all FIXED)
+
+A second multi-agent workflow (8 module reviewers + adversarial verifiers + completeness
+critic) ran after the round-1 fixes. It confirmed 9 new bugs not in round 1 — all in the
+load/coercion/merge/fallback paths — and refuted 2 others as not-reachable. All 9 are fixed
+and locked in with regression tests.
+
+### R2-1. MEDIUM — Auto-detected OpenAI drops the gateway endpoint (`hypermem/embeddings.py:40`) — ✅ FIXED
+`resolve_embedding_provider` returns `"openai"` for an OpenAI-compatible gateway at
+`llm_endpoint=http://gw:8000/v1`, but `_embedding_url("openai", endpoint)` used only the
+*embedding* endpoint (default `None`), producing `https://api.openai.com/v1/embeddings` — so
+text went to OpenAI instead of the local gateway (401 permanent disable without a key).
+**Fix (applied):** when `provider="auto"` resolves to openai and no explicit embedding
+endpoint is given, the LLM endpoint is inherited as the embed base URL.
+
+### R2-2. MEDIUM — `from_dict` loads uncoerced field values that crash later (`hypermem/types.py:135`) — ✅ FIXED
+`_build_from_fields` passed raw values through. Stale/hand-edited JSON with `content: null`
+loaded `content=None`, then `_tokens_of(None).lower()` crashed every recall; string
+`access_count`/`importance` crashed `+=1` and `max()` in `add_message`/`_apply_decay`.
+**Fix (applied):** `_mem` coerces text fields to str, numeric fields to float/int, and
+`keywords` to a list, treating `None` as "use the default".
+
+### R2-3. LOW — 429 rate limit treated as permanent (`hypermem/embeddings.py:180`) — ✅ FIXED
+`_handle_error` routed all 4xx (incl. 429) to `_fail`, latching `_available=False` forever —
+a transient rate limit killed semantic recall for the process lifetime. **Fix (applied):**
+429 is now transient (backoff + retry), only config errors stay permanent.
+
+### R2-4. LOW — Success path marks client available before validating the vector (`hypermem/embeddings.py:155`) — ✅ FIXED
+A 200 with a null/missing embedding set `_available=True` before the `isinstance` guard, so
+the engine's available gate kept calling `embed` every recall with no backoff. **Fix
+(applied):** only a valid list marks the client available.
+
+### R2-5. LOW — worldIDA merge never resets/increments `turn_count_in_scene` (`hypermem/world_ida.py:267`) — ✅ FIXED
+When the LLM omitted `turn_count_in_scene` (a natural "only what changed" response), the
+merge carried the stale count forward — a new scene started at 8 and only grew. **Fix
+(applied):** the merge now maintains rule 3 — reset to 0 on `scene_changed`, otherwise
+increment the prior count — while still respecting an explicitly-provided count.
+
+### R2-6. LOW — `_as_int("6.0")` raises and resets a count to 0 (`hypermem/world_ida.py:149`) — ✅ FIXED
+`int("6.0")` raises ValueError → default 0, silently losing a turn count a small model
+emitted as a float string. **Fix (applied):** `_as_int` parses via `int(float(value))`.
+
+### R2-7. LOW — `_ida_from_dict` crashes on a present-but-None section (`hypermem/world_ida.py:115`) — ✅ FIXED
+`data.get("meta", {}).get(k)` raised AttributeError when a corrupt/foreign save contained
+`"meta": null` (the load path bypasses validation). **Fix (applied):** each section is
+isinstance-checked before `.get`.
+
+### R2-8. LOW — Explicit `null` confidence resets it to max (`hypermem/world_ida.py:154`) — ✅ FIXED
+`_as_float(None)` → 1.0, so `{"confidence": null}` clobbered a previously-lowered confidence
+to max while an omitted one carried over — asymmetric. **Fix (applied):** the merge drops
+explicit nulls so they read as "unchanged" and the prior value carries forward.
+
+### R2-9. LOW — `total_messages` not coerced to int (`hypermem/types.py:183`) — ✅ FIXED
+A string `total_messages` in stale JSON made `+= 1` and the consolidation throttle
+subtraction raise TypeError. **Fix (applied):** coerced to int at load.
+
+### Refuted (not real, no change)
+- `world_ida.py:193` "numeric/bool scalars in text fields crash the context join" — `_as_str`
+  already coerces all text fields; no crash path.
+- `types.py:151` "stale memories share one module-level keywords list via setdefault" — real
+  shared object, but no code path mutates `keywords` in place; no reachable wrong behavior.
 
 ---
 
@@ -169,8 +233,14 @@ Ollama request schema sent to `http://localhost:11434/api/embeddings` → perman
 The multi-agent workflow (11 parallel reviewers + adversarial verification) was run twice.
 The lens reviewers (concurrency/persistence/lifecycle/score-math) and most module reviewers
 repeatedly hit the model's 128k output-token cap — a systemic issue with many
-large-output agents — so their structured findings were lost. The findings above come from
+large-output agents — so their structured findings were lost. The round-1 findings come from
 my own line-by-line read of every module, cross-checked against the two module reviewers
 that did complete (world_ida, embeddings), and each was reproduced/verified with a live run
 against a stubbed LLM. The engine findings (#1, #2) were independently confirmed with
 executable reproductions.
+
+**Round 2** used a tighter workflow (max 8 short findings per reviewer, adversarial verify,
+completeness critic). The embeddings/world_ida/types reviewers completed and produced the 9
+confirmed findings above; the engine/llm/server reviewers and the critic again hit the output
+cap. The round-2 fixes were cross-checked against my own independent read of the same
+modules. Tests grew from 169 to 180 with regression coverage for every round-2 fix.

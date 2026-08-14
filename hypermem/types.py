@@ -124,6 +124,16 @@ def state_to_dict(state: HyperMemState) -> dict:
     return result
 
 
+def _as_int(value, default: int = 0) -> int:
+    """Coerce a value to int, tolerating float/string forms from stale JSON."""
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _build_from_fields(cls, data: dict, defaults: dict) -> object:
     """Build a dataclass from a dict, tolerating stale or hand-edited JSON.
 
@@ -160,6 +170,29 @@ def state_from_dict(data: dict) -> HyperMemState:
                 mt = MemoryType.EPISODIC
         m = dict(m)
         m["memory_type"] = mt
+        # Coerce known fields so stale/hand-edited JSON can't load cleanly and
+        # then crash later (e.g. content=None -> AttributeError on .lower(),
+        # access_count="42" -> TypeError on +=1). None means "use the default".
+        for k in ("content", "role", "source", "subject", "trigger"):
+            if m.get(k) is None:
+                m[k] = ""
+            elif not isinstance(m[k], str):
+                m[k] = str(m[k])
+        for k in ("importance", "created_at", "last_accessed_at"):
+            v = m.get(k)
+            if v is not None:
+                try:
+                    m[k] = float(v)
+                except (TypeError, ValueError):
+                    m[k] = mem_defaults[k]
+        v = m.get("access_count")
+        if v is not None:
+            try:
+                m["access_count"] = int(float(v))
+            except (TypeError, ValueError):
+                m["access_count"] = mem_defaults["access_count"]
+        if not isinstance(m.get("keywords"), list):
+            m["keywords"] = list(m["keywords"]) if m.get("keywords") else []
         return _build_from_fields(HyperMem, m, mem_defaults)
 
     active = [_mem(m) for m in data.get("active", []) if isinstance(m, dict)]
@@ -180,6 +213,6 @@ def state_from_dict(data: dict) -> HyperMemState:
             for m in data.get("recent_messages", [])
             if isinstance(m, dict)
         ],
-        total_messages=data.get("total_messages", 0),
+        total_messages=_as_int(data.get("total_messages", 0)),
         persona=persona,
     )

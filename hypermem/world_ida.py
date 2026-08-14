@@ -112,21 +112,51 @@ Output JSON:"""
 
 def _ida_from_dict(data: dict) -> WorldIDA:
     """Build WorldIDA from a dict (partial — missing fields get defaults)."""
-    meta = Meta(**{k: data.get("meta", {}).get(k) for k in Meta.__dataclass_fields__})
-    # Coerce the LLM's raw values so a small model emitting strings like
-    # "false" or "5" can't poison the typed state. bool("false") is True,
-    # which would otherwise flag a scene change every single turn.
+    # Coerce every field so a non-scalar value (a dict/list from a malformed
+    # model response, or from state saved before validation) can't poison the
+    # typed state. bool("false") is True, so scene_changed is coerced
+    # explicitly; string fields are coerced so context injection's ", ".join
+    # never crashes on a nested object.
+    def _text(section: str, key: str) -> str:
+        sec = data.get(section)
+        return _as_str(sec.get(key) if isinstance(sec, dict) else None)
+
+    meta_src = data.get("meta")
+    meta_src = meta_src if isinstance(meta_src, dict) else {}
+    meta = Meta(**{k: meta_src.get(k) for k in Meta.__dataclass_fields__})
     meta.scene_changed = _as_bool(meta.scene_changed)
     meta.turn_count_in_scene = _as_int(meta.turn_count_in_scene)
     meta.last_updated_turn_index = _as_int(meta.last_updated_turn_index)
     meta.confidence = _as_float(meta.confidence)
     return WorldIDA(
-        scene=Scene(**{k: data.get("scene", {}).get(k) for k in Scene.__dataclass_fields__}),
-        user=UserState(**{k: data.get("user", {}).get(k) for k in UserState.__dataclass_fields__}),
-        character=CharacterState(**{k: data.get("character", {}).get(k) for k in CharacterState.__dataclass_fields__}),
-        relationship=Relationship(**{k: data.get("relationship", {}).get(k) for k in Relationship.__dataclass_fields__}),
+        scene=Scene(location=_text("scene", "location"),
+                    sub_location=_text("scene", "sub_location") or None,
+                    time_of_day=_text("scene", "time_of_day"),
+                    ambient_conditions=_text("scene", "ambient_conditions") or None,
+                    ongoing_action=_text("scene", "ongoing_action"),
+                    last_completed_action=_text("scene", "last_completed_action") or None,
+                    interrupted_action=_text("scene", "interrupted_action") or None),
+        user=UserState(physical_state=_text("user", "physical_state")),
+        character=CharacterState(physical_state=_text("character", "physical_state"),
+                                 appearance=_text("character", "appearance") or None,
+                                 mood=_text("character", "mood"),
+                                 mood_trajectory=_text("character", "mood_trajectory") or None,
+                                 energy_level=_text("character", "energy_level") or None),
+        relationship=Relationship(stage=_text("relationship", "stage"),
+                                  trust_level=_text("relationship", "trust_level") or None,
+                                  unresolved_thread=_text("relationship", "unresolved_thread") or None),
         meta=meta,
     )
+
+
+def _as_str(value) -> str:
+    """Coerce a field value to a string. Non-scalar values (dict/list/object)
+    become "" (empty) so they can't crash context injection."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return ""
 
 
 def _as_bool(value) -> bool:
@@ -146,12 +176,20 @@ def _as_int(value, default: int = 0) -> int:
     if isinstance(value, bool):
         return int(value)
     try:
-        return int(value)
+        # Accept "6.0" / 6.0 as 6 — a small model may emit a float as a string
+        # for an int field, and int("6.0") would raise and silently reset the
+        # count to default.
+        return int(float(value))
     except (TypeError, ValueError):
         return default
 
 
 def _as_float(value, default: float = 1.0) -> float:
+    if value is None:
+        # An explicit null (e.g. the LLM cleared a field) must not silently
+        # reset to the default; that would clobber a previously-lowered
+        # confidence with max. Callers decide whether None means "keep prior".
+        return default
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -258,7 +296,12 @@ async def update_world_ida(
             base = _ida_to_dict(previous_ida)
             for section, fields in parsed.items():
                 if isinstance(fields, dict):
-                    base.setdefault(section, {}).update(fields)
+                    # Drop explicit nulls so they can't clobber a carried-over
+                    # value (e.g. {"confidence": null} would otherwise reset a
+                    # lowered confidence to max). "Output only what changed"
+                    # means null reads as "unchanged", not "reset to default".
+                    merged = {k: v for k, v in fields.items() if v is not None}
+                    base.setdefault(section, {}).update(merged)
             # scene_changed is a one-shot "this turn changed the scene" flag.
             # It must never be carried forward from the previous state, or a
             # turn that omits meta would re-flag a change and store a duplicate
@@ -266,6 +309,19 @@ async def update_world_ida(
             # explicitly set it.
             if "meta" not in parsed or "scene_changed" not in parsed.get("meta", {}):
                 base.setdefault("meta", {})["scene_changed"] = False
+            # Rule 3: the LLM should output turn_count_in_scene, but a compact
+            # "only what changed" response may omit it. Maintain the invariant
+            # here so a new scene doesn't inherit a stale count: reset to 0 on
+            # a scene change, otherwise increment the prior count. If the LLM
+            # explicitly provided a count, respect it. (The base always carries
+            # the prior count, so check the LLM's parsed output, not the base.)
+            llm_meta = parsed.get("meta", {}) if isinstance(parsed.get("meta"), dict) else {}
+            if "turn_count_in_scene" not in llm_meta:
+                meta = base.setdefault("meta", {})
+                if meta.get("scene_changed"):
+                    meta["turn_count_in_scene"] = 0
+                else:
+                    meta["turn_count_in_scene"] = meta.get("turn_count_in_scene", 0) + 1
             new_ida = _ida_from_dict(base)
         else:
             new_ida = _ida_from_dict(parsed)

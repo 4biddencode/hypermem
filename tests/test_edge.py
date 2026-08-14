@@ -299,30 +299,24 @@ class TestStateIntegrity:
             assert mid not in ids
             ids.add(mid)
 
-    def test_pinned_memories_survive_archiving(self):
-        """Pinned memories should never be archived."""
-        hm = make_hm(max_active_memories=5)
-        # Add 10 pinned memories
-        for i in range(10):
-            hm.state.active.append(HyperMem(
-                id=f"pinned_{i}", content=f"Pinned {i}", created_at=time.time(),
-                last_accessed_at=time.time(), access_count=0, keywords=[],
-                importance=0.1, source="user", pinned=True,
-            ))
-        # Archive should keep pinned, archive unpinned first
-        if len(hm.state.active) > hm.config.max_active_memories:
-            # Sort: unpinned first (archived), pinned last (kept)
-            sorted_mems = sorted(
-                hm.state.active,
-                key=lambda m: (not m.pinned, m.importance * (m.access_count + 1)),
-            )
-            hm.state.archive.extend(sorted_mems[:len(sorted_mems) - hm.config.max_active_memories])
-            hm.state.active = sorted_mems[-hm.config.max_active_memories:]
-        # All 10 are pinned, but max is 5 — only 5 survive
-        # The archive logic keeps the LAST 5, which are all pinned
-        assert len(hm.state.active) == 5
-        # All remaining should be pinned
-        assert all(m.pinned for m in hm.state.active)
+    @pytest.mark.asyncio
+    async def test_pinned_memories_survive_archiving(self):
+        """Pinned memories must never be archived when the cap is hit — the
+        archive sort must drop unpinned memories first, not pinned ones."""
+        hm = make_hm(max_active_memories=3)
+        # Fill the store with unpinned episodic memories (the stub judge
+        # stores every non-empty message as a fact). 6 > cap of 3.
+        for i in range(6):
+            await hm.add_message("user", f"Unpinned fact number {i} about the quest")
+        # Add one pinned memory (explicit remember).
+        pinned_mem = hm.remember("This is my pinned secret", MemoryType.STATIC)
+        # One more add triggers the archive-over-limit in the real engine path.
+        await hm.add_message("user", "Another unpinned fact about the quest")
+        # The pinned memory must survive; only unpinned ones are archived.
+        assert pinned_mem.id in {m.id for m in hm.state.active}
+        assert pinned_mem.pinned is True
+        assert all(m.id != pinned_mem.id for m in hm.state.archive)
+        assert len(hm.state.active) <= hm.config.max_active_memories
 
     @pytest.mark.asyncio
     async def test_concurrent_message_addition(self):
@@ -368,6 +362,28 @@ class TestMemoryCorruption:
         assert state.total_messages == 0
         assert state.active == []
         assert state.archive == []
+
+    def test_stale_json_coerces_memory_fields(self):
+        """Stale/hand-edited JSON with null content or string scalars must load
+        with coerced types, not crash later on .lower() or += 1."""
+        from hypermem.types import state_from_dict
+        state = state_from_dict({
+            "total_messages": "42",
+            "active": [{
+                "id": "m1", "content": None, "importance": "0.8",
+                "access_count": "3", "created_at": "1000.5",
+                "last_accessed_at": "1000.5", "keywords": None,
+            }],
+        })
+        assert state.total_messages == 42  # coerced to int
+        mem = state.active[0]
+        assert mem.content == ""  # None -> ""
+        assert mem.importance == 0.8  # str -> float
+        assert mem.access_count == 3  # str -> int
+        assert mem.keywords == []  # None -> []
+        # The engine's += 1 and decay math must not raise on this loaded state.
+        from hypermem.engine import _apply_decay
+        _apply_decay(mem)  # must not raise
 
     def test_none_content_in_memory(self):
         """None content should not crash keyword extraction."""

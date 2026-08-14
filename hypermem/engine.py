@@ -285,11 +285,25 @@ def _is_identity_statement(text: str) -> bool:
     King's true name is Malachar") never gets the identity tag. A possessive
     lookalike ("My name is Eldrin's cousin") is not naming yourself — it
     names someone who belongs to you — so it never gets the tag either.
+
+    "I am X" only counts when X is a capitalized proper noun (a name), not a
+    bare "I am tired" / "I was at the store" — those reveal state, not
+    identity, and must not be tagged with the "name" keyword.
     """
     if re.search(r"\bmy name is\s+\w+'s\b", text, re.I):
         return False
+    # "I am X" / "I'm X" / "I was X" only count when X is a capitalized
+    # proper noun (a name), not a bare "I am tired" / "I was at the store".
+    # The subject may be "I" or "i" (sentence-initial is capitalized), but
+    # the name that follows must be capitalized — that is what distinguishes
+    # naming yourself from describing a state.
+    if re.search(r"\b[Ii] (?:am|'m|was)\s+[A-Z][a-z]+\b", text):
+        return True
+    # "My name is X", "I'm called X", "I am called X", "I'm known as X",
+    # "I am known as X" — case-insensitive. The "called"/"known as"
+    # constructions are inherently identity, so no capitalization check.
     return bool(re.search(
-        r"\bmy name\b|\bi (?:am|'m|was)\b|\bi'?m (?:called|known as)\b",
+        r"\bmy name\b|\bi'?m\s+(?:called|known as)\b|\bi am\s+(?:called|known as)\b",
         text, re.I,
     ))
 
@@ -504,10 +518,14 @@ class HyperMEM:
                             self.state.active.append(mem)
                             tagged = mem
 
-        # 3. Archive if over limit (respecting decay)
+        # 3. Archive if over limit (respecting decay).
+        # Sort ascending by (pinned, decayed score): unpinned memories (False=0)
+        # come first and are archived first; pinned memories (True=1) sort last
+        # and survive the cap. (The key must be `pinned`, not `not pinned` —
+        # `not pinned` puts pinned first and archives them, the opposite intent.)
         if len(self.state.active) > self.config.max_active_memories:
             scored = [(m, _apply_decay(m)) for m in self.state.active]
-            scored.sort(key=lambda x: (not x[0].pinned, x[1]))
+            scored.sort(key=lambda x: (x[0].pinned, x[1]))
             to_archive = scored[:len(scored) - self.config.max_active_memories]
             for mem, _ in to_archive:
                 self.state.archive.append(mem)
@@ -568,10 +586,12 @@ class HyperMEM:
             return
 
         # Group episodic memories by subject (a subject is required — fusing
-        # a jumble of unlabeled events would produce garbage).
+        # a jumble of unlabeled events would produce garbage). Pinned memories
+        # are excluded: they are user-explicit and must never be archived, so
+        # consolidation must not fold them away either.
         by_subject: dict[str, list[HyperMem]] = {}
         for m in self.state.active:
-            if m.memory_type == MemoryType.EPISODIC and m.subject:
+            if m.memory_type == MemoryType.EPISODIC and m.subject and not m.pinned:
                 by_subject.setdefault(m.subject.lower(), []).append(m)
         if not by_subject:
             return
@@ -935,6 +955,9 @@ class HyperMEM:
         """Serialize the full engine state (memories + worldIDA) to a dict."""
         from .world_ida import _ida_to_dict
         data = state_to_dict(self.state)
+        # Persist the consolidation throttle so a reload doesn't reset it and
+        # immediately re-consolidate a subject that just consolidated.
+        data["_last_consolidation"] = self._last_consolidation
         if self._world_ida is not None:
             data["world_ida"] = _ida_to_dict(self._world_ida)
         if self._world_ida_store is not None:
@@ -945,6 +968,9 @@ class HyperMEM:
         """Restore the full engine state from a dict."""
         from .world_ida import _ida_from_dict, WorldIDAStore
         self.state = state_from_dict(data)
+        # Restore the consolidation throttle; default to 0 (from a pre-persist
+        # save or hand-edited JSON) so consolidation is allowed from the start.
+        self._last_consolidation = int(data.get("_last_consolidation", 0) or 0)
         if "world_ida" in data:
             self._world_ida = _ida_from_dict(data["world_ida"])
         if "world_ida_store" in data:

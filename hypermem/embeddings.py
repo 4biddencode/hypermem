@@ -89,6 +89,13 @@ class EmbeddingClient:
         if self.provider not in ("ollama", "openai", "none"):
             self.provider = "none"
         self.model = model or DEFAULT_EMBED_MODELS.get(self.provider)
+        # When the provider was auto-detected from the LLM (e.g. an OpenAI-
+        # compatible gateway at llm_endpoint=/v1) and no explicit embedding
+        # endpoint was given, inherit the LLM endpoint as the embed base URL.
+        # Otherwise auto→openai would silently default to api.openai.com and
+        # send text to OpenAI instead of the local gateway.
+        if endpoint is None and provider == "auto" and llm_endpoint:
+            endpoint = llm_endpoint
         self.endpoint = endpoint
         self.api_key = api_key
         self._transport = transport
@@ -152,9 +159,15 @@ class EmbeddingClient:
                     return self._handle_error(resp.status_code)
                 data = resp.json()
                 vec = data.get("embedding")
+                if not isinstance(vec, list):
+                    # A 200 with a malformed/missing embedding is not a valid
+                    # success — don't mark the client available, or the engine's
+                    # available gate would keep calling embed every recall with
+                    # no backoff.
+                    return None
                 self._available = True
                 self._retry_at = 0.0
-                return vec if isinstance(vec, list) else None
+                return vec
             if self.provider == "openai":
                 headers = {"Content-Type": "application/json"}
                 if self.api_key:
@@ -167,16 +180,24 @@ class EmbeddingClient:
                 data = resp.json()
                 items = data.get("data", []) or []
                 vec = items[0].get("embedding") if items else None
+                if not isinstance(vec, list):
+                    return None
                 self._available = True
                 self._retry_at = 0.0
-                return vec if isinstance(vec, list) else None
+                return vec
         except Exception as e:  # timeout, connection error, bad payload
             logger.debug("embedding failure (%s): %s", self.provider, e)
             return self._transient()
         return None
 
     def _handle_error(self, status: int) -> None:
-        """4xx is permanent (bad config/missing model); 5xx is transient."""
+        """4xx is permanent (bad config/missing model); 429 and 5xx transient.
+
+        429 is a rate limit that clears up on its own — parking the client
+        permanently would kill semantic recall for the process lifetime.
+        """
+        if status == 429:
+            return self._transient()
         if 400 <= status < 500:
             return self._fail(status)
         return self._transient()

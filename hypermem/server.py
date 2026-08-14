@@ -261,7 +261,10 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.get("/sessions/{session_id}/memories")
     async def memories(session_id: str):
         hm = store.get(session_id)
-        return {"memories": hm.memories()}
+        # Take the per-session lock so a concurrent mutating handler (which
+        # may be mid-await) can't leave a torn read of the active/archive lists.
+        async with store.lock(session_id):
+            return {"memories": hm.memories()}
 
     @app.put("/sessions/{session_id}/persona")
     async def set_persona(session_id: str, body: PersonaIn):
@@ -276,11 +279,12 @@ def create_app(config: Optional[HyperMemConfig] = None,
     @app.get("/sessions/{session_id}/world-ida")
     async def world_ida(session_id: str):
         hm = store.get(session_id)
-        ida = hm.get_world_ida()
-        if ida is None:
-            return {"world_ida": None}
-        from .world_ida import _ida_to_dict
-        return {"world_ida": _ida_to_dict(ida)}
+        async with store.lock(session_id):
+            ida = hm.get_world_ida()
+            if ida is None:
+                return {"world_ida": None}
+            from .world_ida import _ida_to_dict
+            return {"world_ida": _ida_to_dict(ida)}
 
     @app.post("/sessions/{session_id}/world-ida/update")
     async def update_world_ida(session_id: str, body: WorldIDAIn):
@@ -298,55 +302,57 @@ def create_app(config: Optional[HyperMemConfig] = None,
         """Why this memory exists (source message + judge classification) and,
         with ?query=, why it would surface (live score breakdown)."""
         hm = store.get(session_id)
-        location = "active"
-        mem = next((m for m in hm.state.active if m.id == memory_id), None)
-        if mem is None:
-            mem = next((m for m in hm.state.archive if m.id == memory_id), None)
-            location = "archive"
-        if mem is None:
-            raise HTTPException(404, f"memory '{memory_id}' not found")
+        async with store.lock(session_id):
+            location = "active"
+            mem = next((m for m in hm.state.active if m.id == memory_id), None)
+            if mem is None:
+                mem = next((m for m in hm.state.archive if m.id == memory_id), None)
+                location = "archive"
+            if mem is None:
+                raise HTTPException(404, f"memory '{memory_id}' not found")
 
-        stored_from = None
-        if mem.source_message_id:
-            stored_from = next(
-                (m.content for m in hm.state.recent_messages
-                 if m.id == mem.source_message_id),
-                None)
-        if location == "active":
-            lifecycle = "active"
-        elif mem.superseded_by:
-            lifecycle = "superseded"
-        else:
-            lifecycle = "archived"
+            stored_from = None
+            if mem.source_message_id:
+                stored_from = next(
+                    (m.content for m in hm.state.recent_messages
+                     if m.id == mem.source_message_id),
+                    None)
+            if location == "active":
+                lifecycle = "active"
+            elif mem.superseded_by:
+                lifecycle = "superseded"
+            else:
+                lifecycle = "archived"
 
-        payload = {
-            "id": mem.id,
-            "content": mem.content,
-            "memory_type": mem.memory_type.value,
-            "importance": round(mem.importance, 4),
-            "subject": mem.subject,
-            "keywords": mem.keywords,
-            "source": mem.source,
-            "source_message_id": mem.source_message_id,
-            "stored_from": stored_from,
-            "created_at": mem.created_at,
-            "last_accessed_at": mem.last_accessed_at,
-            "access_count": mem.access_count,
-            "pinned": mem.pinned,
-            "lifecycle": lifecycle,
-            "superseded_by": mem.superseded_by,
-            "consolidated_from": mem.consolidated_from,
-        }
-        if query:
-            payload["ranking"] = await hm.explain_recall(query, mem.id)
-        return payload
+            payload = {
+                "id": mem.id,
+                "content": mem.content,
+                "memory_type": mem.memory_type.value,
+                "importance": round(mem.importance, 4),
+                "subject": mem.subject,
+                "keywords": mem.keywords,
+                "source": mem.source,
+                "source_message_id": mem.source_message_id,
+                "stored_from": stored_from,
+                "created_at": mem.created_at,
+                "last_accessed_at": mem.last_accessed_at,
+                "access_count": mem.access_count,
+                "pinned": mem.pinned,
+                "lifecycle": lifecycle,
+                "superseded_by": mem.superseded_by,
+                "consolidated_from": mem.consolidated_from,
+            }
+            if query:
+                payload["ranking"] = await hm.explain_recall(query, mem.id)
+            return payload
 
     # ---- Export / import ----
 
     @app.get("/sessions/{session_id}/state")
     async def get_state(session_id: str):
         hm = store.get(session_id)
-        return JSONResponse(hm.to_dict())
+        async with store.lock(session_id):
+            return JSONResponse(hm.to_dict())
 
     return app
 

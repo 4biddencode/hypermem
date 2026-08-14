@@ -377,3 +377,68 @@ def test_world_ida_store_serialization():
     store2.from_dict(data)
     assert store2.get("s1") is not None
     assert store2.get("s1").scene.location == "tavern"
+
+
+# ---- Round-2 findings ----
+
+@pytest.mark.asyncio
+async def test_turn_count_increments_when_omitted():
+    """Rule 3: when the LLM omits turn_count_in_scene (compact output), the
+    merge must increment the prior count rather than carry it stale."""
+    prev = make_ida()  # turn_count_in_scene=5
+    # LLM emits only scene_changed=false, omitting the count entirely
+    response = json.dumps({"meta": {"scene_changed": False}})
+    llm = StubLLM(response)
+    result = await update_world_ida(prev, "Hello.", "Hi!", llm_complete=llm)
+    assert result.meta.turn_count_in_scene == 6  # 5 + 1
+
+
+@pytest.mark.asyncio
+async def test_turn_count_resets_on_scene_change_when_omitted():
+    """Rule 3: a scene change with an omitted count must reset to 0, not carry
+    the stale prior count into the new scene."""
+    prev = make_ida()  # turn_count_in_scene=5
+    response = json.dumps({"meta": {"scene_changed": True}})
+    llm = StubLLM(response)
+    result = await update_world_ida(prev, "Let's leave.", "We head out.", llm_complete=llm)
+    assert result.meta.scene_changed is True
+    assert result.meta.turn_count_in_scene == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_turn_count_respected():
+    """An explicitly-provided count wins over the auto-increment."""
+    prev = make_ida()  # turn_count_in_scene=5
+    response = json.dumps({"meta": {"scene_changed": False, "turn_count_in_scene": 9}})
+    llm = StubLLM(response)
+    result = await update_world_ida(prev, "Hello.", "Hi!", llm_complete=llm)
+    assert result.meta.turn_count_in_scene == 9  # not auto-incremented
+
+
+@pytest.mark.asyncio
+async def test_null_confidence_keeps_prior():
+    """An explicit null confidence must not reset a lowered confidence to max —
+    null reads as 'unchanged', so the prior value is carried forward."""
+    prev = make_ida()
+    prev.meta.confidence = 0.4  # previously lowered
+    response = json.dumps({"meta": {"confidence": None}})
+    llm = StubLLM(response)
+    result = await update_world_ida(prev, "Hello.", "Hi!", llm_complete=llm)
+    assert result.meta.confidence == 0.4  # preserved, not reset to 1.0
+
+
+def test_ida_from_dict_none_section_does_not_crash():
+    """A present-but-None section (e.g. "meta": null in foreign/corrupt JSON)
+    must not raise AttributeError during load."""
+    ida = _ida_from_dict({"meta": None, "scene": None})
+    assert ida.meta.confidence == 1.0
+    assert ida.scene.location == ""
+
+
+def test_as_int_accepts_float_strings():
+    """_as_int("6.0") / 6.0 must yield 6, not fall back to 0 and lose a count."""
+    from hypermem.world_ida import _as_int
+    assert _as_int("6.0") == 6
+    assert _as_int(6.0) == 6
+    assert _as_int("3") == 3
+    assert _as_int("not a number") == 0  # genuinely bad input still defaults
