@@ -5,13 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "hypermem"
 version = "1.0.0"
-description = "AI memory system that never forgets what matters"
+description = "AI memory layer that never forgets what matters — judge, store, recall, inject"
 readme = "README.md"
-license = { text = "HyperMEM Source-Available License" }
+# Custom source-available license (not an SPDX id). PEP 639: point PyPI at the
+# license text file instead of a `license = {text=...}` table, which modern
+# PyPI rejects on upload.
+license-files = ["LICENSE"]
 authors = [
     { name = "4biddencode", email = "4biddencode@users.noreply.github.com" },
 ]
 requires-python = ">=3.10"
+keywords = [
+    "memory", "llm", "ai", "companion", "rag", "semantic-search",
+    "world-state", "conversation", "context",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "httpx>=0.27.0",
 ]
@@ -30,6 +48,10 @@ Repository = "https://github.com/4biddencode/hypermem"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hypermem"]
+
+# Ship the PEP 561 marker so type checkers treat HyperMEM as fully typed.
+[tool.hatch.build.targets.wheel.force-include]
+"hypermem/py.typed" = "hypermem/py.typed"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not live'"
