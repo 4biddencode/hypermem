@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23", "fastapi>=0.110", "uvicorn>=0.29"]
 server = ["fastapi>=0.110", "uvicorn>=0.29"]
 benchmark = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
