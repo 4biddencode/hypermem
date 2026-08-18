@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     # Only publish from the canonical repo, not forks.
     if: github.repository == '4biddencode/hypermem'
+    # Named environment so PyPI trusted publishing only accepts runs from it.
+    environment: pypi
     steps:
       - uses: actions/checkout@v4
 
