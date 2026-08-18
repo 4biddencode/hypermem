@@ -13,17 +13,17 @@
 <p align="center">
   <a href="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml"><img src="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/hypermem/"><img src="https://img.shields.io/pypi/v/hypermem.svg" alt="PyPI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-blue.svg" alt="License: Source-Available"></a>
+  <a href="https://github.com/4biddencode/hypermem/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-source--available-blue.svg" alt="License: Source-Available"></a>
   <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
   <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/llms-ollama%20%7C%20openai%20%7C%20anthropic-blue.svg" alt="Ollama / OpenAI / Anthropic"></a>
 </p>
 
 <p align="center">
-  <a href="#get-started-60-seconds">Install</a> ·
-  <a href="#proof">Proof</a> ·
-  <a href="#how-it-works-30-seconds">How it works</a> ·
-  <a href="#api">API</a> ·
-  <a href="#license">License</a>
+  <a href="https://github.com/4biddencode/hypermem#get-started-60-seconds">Install</a> ·
+  <a href="https://github.com/4biddencode/hypermem#proof">Proof</a> ·
+  <a href="https://github.com/4biddencode/hypermem#how-it-works-30-seconds">How it works</a> ·
+  <a href="https://github.com/4biddencode/hypermem#api">API</a> ·
+  <a href="https://github.com/4biddencode/hypermem#license">License</a>
 </p>
 
 ---
@@ -117,7 +117,7 @@ python examples/demo.py
 ```
 
 <p align="center">
-  <img src="assets/demo.gif" alt="HyperMEM demo - real model, real output" width="720">
+  <img src="https://raw.githubusercontent.com/4biddencode/hypermem/main/assets/demo.gif" alt="HyperMEM demo - real model, real output" width="720">
   <br><sub>Live: 8 facts planted, 40 filler messages, 8/8 recall, a changed fact superseded, provenance, worldIDA. Real Ollama, no mocks.</sub>
 </p>
 
@@ -284,8 +284,6 @@ The important ones:
 | `max_memory_chars` | `1000` | verbatim content cap per memory |
 | `embedding_provider` | `auto` | `ollama` \| `openai` \| `none` |
 
-<!-- SECTION4 -->
-
 ## API
 
 The public surface is small on purpose. Everything else is internal.
@@ -346,12 +344,13 @@ tests/             # hermetic, no network
 
 HyperMEM is source-available. You are welcome to read it, run it, and
 contribute fixes and improvements. Please open an issue or PR - see
-[CONTRIBUTING](CONTRIBUTING.md) for the details, and the license below for what
-you can and cannot do with the code.
+[CONTRIBUTING](https://github.com/4biddencode/hypermem/blob/main/CONTRIBUTING.md)
+for the details, and the license below for what you can and cannot do with the
+code.
 
 ## License
 
-[Source-Available License](LICENSE) - you can read, run, and modify the code
+[Source-Available License](https://github.com/4biddencode/hypermem/blob/main/LICENSE) - you can read, run, and modify the code
 for your own use, and contribute back. Redistributing a competing hosted
 service built on it requires attribution. See the full license for the exact
 terms.
