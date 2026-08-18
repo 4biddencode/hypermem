@@ -1,12 +1,6 @@
-<div align="center"><pre>
-  ██╗  ██╗ ██╗   ██╗ ██████╗  ███████╗ ██████╗  ███╗   ███╗ ███████╗ ███╗   ███╗
-  ██║  ██║ ╚██╗ ██╔╝ ██╔══██╗ ██╔════╝ ██╔══██╗ ████╗ ████║ ██╔════╝ ████╗ ████║
-  ███████║  ╚████╔╝  ██████╔╝ █████╗   ██████╔╝ ██╔████╔██║ █████╗   ██╔████╔██║
-  ██╔══██║   ╚═══╝   ██╔═══╝  ██╔══╝   ██╔══██╗ ██║╚██╔╝██║ ██╔══╝   ██║╚██╔╝██║
-  ██║  ██║   ██╗     ██║      ███████╗ ██║  ██║ ██║ ╚═╝ ██║ ███████╗ ██║ ╚═╝ ██║
-  ██║  ██║   ╚═╝     ╚═╝      ╚══════╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚══════╝ ╚═╝     ╚═╝
-              The AI memory layer for companions that actually remember
-</pre></div>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/4biddencode/hypermem/main/assets/banner.png" alt="HyperMEM - AI memory layer" width="100%">
+</p>
 
 <p align="center"><strong>judge-classify · store verbatim · hybrid semantic recall · live world-state · LLM-agnostic · local-first · introspectable</strong></p>
 
@@ -354,3 +348,7 @@ code.
 for your own use, and contribute back. Redistributing a competing hosted
 service built on it requires attribution. See the full license for the exact
 terms.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/4biddencode/hypermem/main/assets/footer.png" alt="HyperMEM" width="100%">
+</p>
