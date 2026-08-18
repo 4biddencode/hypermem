@@ -687,6 +687,29 @@ class TestPersistence:
         assert "static" in types
         assert "episodic" in types
 
+    def test_narrative_time_persists(self, tmp_path):
+        from hypermem.narrative_time import NarrativeTime
+        hm = make_hm()
+        hm._narrative_time = NarrativeTime(time_of_day="morning", day_count=3)
+        path = tmp_path / "nt.json"
+        hm.save(str(path))
+
+        hm2 = make_hm()
+        hm2.load(str(path))
+        assert hm2._narrative_time is not None
+        assert hm2._narrative_time.time_of_day == "morning"
+        assert hm2._narrative_time.day_count == 3
+
+    def test_from_dict_clears_stale_narrative_time(self):
+        """Loading a save that omits narrative_time must clear any previously
+        loaded value — a stale session's day count must not leak forward."""
+        from hypermem.narrative_time import NarrativeTime
+        hm = make_hm()
+        hm._narrative_time = NarrativeTime(time_of_day="night", day_count=9)
+        hm.from_dict({"conversation_id": "fresh", "active": [], "archive": [],
+                      "recent_messages": [], "total_messages": 0})
+        assert hm._narrative_time is None
+
     def test_from_dict_clears_stale_world_ida(self):
         """Loading a save that omits world_ida must clear any previously-loaded
         world state — otherwise a stale previous session's scene leaks into this
@@ -803,7 +826,7 @@ class TestUpdateWorldOffline:
 class TestContentAgnosticAllRP:
     """HyperMEM must serve every roleplay register identically: SFW,
     suggestive, explicit. The judge classifies, storage is verbatim, and
-    worldIDA tracks relationship state -- none of it may filter or reshape
+    worldIDA tracks physical state -- none of it may filter or reshape
     content based on how spicy it is."""
 
     async def _plant_and_recall(self, hm, content: str, query: str) -> list:
@@ -833,7 +856,9 @@ class TestContentAgnosticAllRP:
             "both registers must be remembered, none filtered"
 
     @pytest.mark.asyncio
-    async def test_relationship_stage_in_worldida(self):
+    async def test_physical_state_in_worldida(self):
+        """worldIDA tracks PHYSICAL state only — position persists across turns
+        and no relationship/mood/time fields exist (they live elsewhere)."""
         from hypermem.types import Persona
         hm = make_hm()
         hm.set_persona(Persona(name="Kai", description="A patient lover"))
@@ -844,11 +869,42 @@ class TestContentAgnosticAllRP:
         )
         ida = hm.get_world_ida()
         assert ida is not None
-        # relationship state carries over across turns
+        # Physical position carries over across turns (stub echoes prev state).
         await hm.update_world_ida(
             "That was beautiful.",
             "*Kai holds you.*",
             persona_context="Kai, a patient lover.",
         )
         ida2 = hm.get_world_ida()
-        assert ida2 is not None and ida2.relationship is not None
+        assert ida2 is not None
+        assert not hasattr(ida2, "relationship")
+        assert not hasattr(ida2.character, "mood")
+
+
+class TestNarrativeTime:
+    @pytest.mark.asyncio
+    async def test_narrative_time_block_in_context_after_boundary(self):
+        """A night->morning boundary advances the day counter, and the
+        [NARRATIVE TIME] block appears in get_context once a day has passed."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        # Night turn seeds time_of_day=night, day 0.
+        await hm.update_world_ida(
+            "The sun sets over the tavern.", "We settle in for the night.")
+        # Morning turn crosses the boundary -> day 1.
+        await hm.update_world_ida(
+            "I wake up at dawn.", "Good morning.")
+        ctx = await hm.get_context("What time is it?")
+        assert "[NARRATIVE TIME]" in ctx
+        assert "day 1" in ctx
+
+    @pytest.mark.asyncio
+    async def test_no_narrative_time_block_on_day_zero(self):
+        """Before any day has passed, the block is omitted entirely — the
+        opening scene doesn't need elapsed-time context."""
+        client, _ = make_llm()
+        hm = HyperMEM(HyperMemConfig(), llm=client)
+        await hm.update_world_ida(
+            "We sit down at the tavern.", "*Elena pours two ales.*")
+        ctx = await hm.get_context("Where are we?")
+        assert "[NARRATIVE TIME]" not in ctx

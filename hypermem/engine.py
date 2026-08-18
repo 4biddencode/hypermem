@@ -357,6 +357,7 @@ class HyperMEM:
         self._last_consolidation = 0  # message-count throttle for consolidation
         self._world_ida = None
         self._world_ida_store = None
+        self._narrative_time = None
 
     async def __aenter__(self) -> "HyperMEM":
         return self
@@ -656,6 +657,7 @@ class HyperMEM:
     async def update_world_ida(self, user_msg: str, ai_msg: str,
                                 persona_context: Optional[str] = None) -> None:
         from .world_ida import update_world_ida as _update, scene_transition_summary
+        from .narrative_time import update_narrative_time as _update_time
 
         old_ida = self._world_ida
         new_ida = await _update(
@@ -665,6 +667,16 @@ class HyperMEM:
             persona_context=persona_context or (
                 self.state.persona.description if self.state.persona else None
             ),
+            llm_complete=self._llm.complete,
+        )
+
+        # Narrative time lives outside worldIDA (physical-only), in its own
+        # block. Update it alongside so the AI's sense of elapsed story time
+        # stays current.
+        self._narrative_time = await _update_time(
+            previous=self._narrative_time,
+            last_user_message=user_msg,
+            last_ai_response=ai_msg,
             llm_complete=self._llm.complete,
         )
 
@@ -952,6 +964,14 @@ class HyperMEM:
             if ctx_str:
                 parts.append(f"[WORLD STATE]\n{ctx_str}\n[/WORLD STATE]")
 
+        # Narrative time (morning/evening + elapsed story days) is a separate
+        # block, not part of the physical world state. Omitted on day 0.
+        if hasattr(self, '_narrative_time') and self._narrative_time is not None:
+            from .narrative_time import narrative_time_to_context_string
+            time_str = narrative_time_to_context_string(self._narrative_time)
+            if time_str:
+                parts.append(f"[NARRATIVE TIME]\n{time_str}\n[/NARRATIVE TIME]")
+
         recall = await self.recall(current_message)
         if recall.relevant:
             mem_block = "[RELEVANT MEMORIES]\n" + "\n".join(
@@ -991,6 +1011,7 @@ class HyperMEM:
     def to_dict(self) -> dict:
         """Serialize the full engine state (memories + worldIDA) to a dict."""
         from .world_ida import _ida_to_dict
+        from .narrative_time import _to_dict as _time_to_dict
         data = state_to_dict(self.state)
         # Persist the consolidation throttle so a reload doesn't reset it and
         # immediately re-consolidate a subject that just consolidated.
@@ -999,11 +1020,14 @@ class HyperMEM:
             data["world_ida"] = _ida_to_dict(self._world_ida)
         if self._world_ida_store is not None:
             data["world_ida_store"] = self._world_ida_store.to_dict()
+        if self._narrative_time is not None:
+            data["narrative_time"] = _time_to_dict(self._narrative_time)
         return data
 
     def from_dict(self, data: dict) -> None:
         """Restore the full engine state from a dict."""
         from .world_ida import _as_int, _ida_from_dict, WorldIDAStore
+        from .narrative_time import _from_dict as _time_from_dict
         self.state = state_from_dict(data)
         # Restore the consolidation throttle; default to 0 (from a pre-persist
         # save or hand-edited JSON) so consolidation is allowed from the start.
@@ -1018,12 +1042,15 @@ class HyperMEM:
         # isinstance so a corrupt list value can't crash the whole load.
         self._world_ida = None
         self._world_ida_store = None
+        self._narrative_time = None
         if isinstance(data.get("world_ida"), dict):
             self._world_ida = _ida_from_dict(data["world_ida"])
         if isinstance(data.get("world_ida_store"), dict):
             store = WorldIDAStore()
             store.from_dict(data["world_ida_store"])
             self._world_ida_store = store
+        if isinstance(data.get("narrative_time"), dict):
+            self._narrative_time = _time_from_dict(data["narrative_time"])
 
     def save(self, path: str):
         """Persist full engine state to JSON (atomic write)."""

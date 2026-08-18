@@ -219,10 +219,10 @@ class TestEngineWiring:
             prompt = json.loads(request.content)["messages"][-1]["content"]
             if "roleplay scene" in prompt:
                 return httpx.Response(200, json={"content": [{"type": "text", "text": json.dumps({
-                    "scene": {"location": "tavern", "time_of_day": "evening"},
-                    "user": {},
-                    "character": {"mood": "guarded"},
-                    "relationship": {},
+                    "scene": {"location": "tavern", "ongoing_action": "pouring ale"},
+                    "user": {"physical_state": "standing in the doorway"},
+                    "character": {"physical_state": "seated in the corner booth",
+                                   "position": "far end of the room"},
                     "meta": {"scene_changed": False, "turn_count_in_scene": 1},
                 })}]})
             return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})

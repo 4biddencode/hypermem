@@ -7,7 +7,8 @@ whole engine pipeline run against it — no live model needed in CI.
 Limited to the prompt shapes HyperMEM itself generates:
 - judge prompts        -> {"has_fact", "importance", "memory_type", "subject", "keywords"}
 - recall prompts       -> "[n, ...]" index list (or "[]")
-- worldIDA prompts     -> scene/user/character/relationship/meta JSON
+- worldIDA prompts     -> scene/user/character/meta JSON (physical-only)
+- narrative time prompts -> {"time_of_day", "day_count"} JSON
 - /api/embeddings      -> deterministic bag-of-words vector
 """
 
@@ -31,7 +32,10 @@ CONSOLIDATE_MARKERS = [
     "Summarize these episodic memories",
 ]
 IDA_MARKERS = [
-    "tracking the current state of a roleplay scene",
+    "tracking the PHYSICAL state of a roleplay scene",
+]
+TIME_MARKERS = [
+    "tracking the TIME in a roleplay story",
 ]
 
 _STOPWORDS = {
@@ -97,6 +101,8 @@ class OllamaStub:
             return self._consolidate(prompt)
         if any(m in prompt for m in IDA_MARKERS):
             return self._ida(prompt)
+        if any(m in prompt for m in TIME_MARKERS):
+            return self._narrative_time(prompt)
         return "ok"
 
     # ---- behaviors ----
@@ -184,14 +190,47 @@ class OllamaStub:
             "scene": prev.get("scene", {}),
             "user": prev.get("user", {}),
             "character": prev.get("character", {}),
-            "relationship": prev.get("relationship", {}),
             "meta": {
                 "scene_changed": False,
                 "turn_count_in_scene": int(meta.get("turn_count_in_scene", 0)) + 1,
                 "last_updated_turn_index": 0,
                 "confidence": 1.0,
+                "physically_possible": meta.get("physically_possible", True),
             },
         })
+
+    def _narrative_time(self, prompt: str) -> str:
+        """Infer narrative time from the exchange and the previous state. The
+        day counter advances only on a night->morning boundary (mirrors the
+        real monotonic logic)."""
+        prev_match = re.search(r"Previous state: (.+?)\nUser:", prompt, re.S)
+        prev = None
+        if prev_match:
+            try:
+                prev = json.loads(prev_match.group(1).strip())
+            except json.JSONDecodeError:
+                prev = None
+        prev = prev or {}
+        tod = prev.get("time_of_day", "")
+        day = int(prev.get("day_count", 0))
+        prev_is_night = tod.strip().lower() in ("night", "midnight", "evening",
+                                                "dusk", "late night")
+        # The schema/RULES above "User:" contain time words ("morning",
+        # "evening"...) — scan ONLY the exchange, or the stub would infer a
+        # time from its own prompt.
+        exchange = prompt.split("User:", 1)[1] if "User:" in prompt else prompt
+        # Infer the current time from the exchange when the previous state has
+        # none yet (the real model does this from the narrative).
+        if not tod:
+            if re.search(r"\b(morning|dawn|sunrise)\b", exchange, re.I):
+                tod = "morning"
+            elif re.search(r"\b(night|midnight|evening|dusk)\b", exchange, re.I):
+                tod = "night"
+        # Night -> morning boundary advances the counter.
+        if prev_is_night and re.search(r"\b(morning|dawn|sunrise|day)\b", exchange, re.I):
+            day += 1
+            tod = "morning"
+        return json.dumps({"time_of_day": tod, "day_count": day})
 
 
 def make_llm(**stub_kwargs) -> tuple[LLMClient, OllamaStub]:

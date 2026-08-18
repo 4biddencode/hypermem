@@ -24,7 +24,7 @@ def diff_ida(before: WorldIDA, after: WorldIDA) -> dict:
     a = _ida_to_dict(after)
     changes = {}
 
-    for section in ["scene", "user", "character", "relationship", "meta"]:
+    for section in ["scene", "user", "character", "meta"]:
         b_sec = b.get(section, {})
         a_sec = a.get(section, {})
         sec_changes = {}

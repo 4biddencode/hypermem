@@ -1,5 +1,10 @@
 """
-worldIDA — a compact, always-current "world state" object for roleplay.
+worldIDA — a compact, always-current PHYSICAL world-state object for roleplay.
+
+worldIDA is ONLY what and how the characters physically are: where they sit,
+how they sit, whether a described action is physically possible in the current
+state. Emotional/social state (mood, relationship) and narrative time live
+elsewhere — narrative time has its own block in narrative_time.py.
 
 Separate from long-term memory (which is searched/ranked and grows over time),
 worldIDA is ONE small object per session, fully overwritten every turn,
@@ -23,32 +28,21 @@ logger = logging.getLogger("hypermem.world_ida")
 class Scene:
     location: str = ""
     sub_location: Optional[str] = None
-    time_of_day: str = ""
     ambient_conditions: Optional[str] = None
     ongoing_action: str = ""
-    last_completed_action: Optional[str] = None
-    interrupted_action: Optional[str] = None
 
 
 @dataclass
 class UserState:
     physical_state: str = ""
+    position: str = ""  # exact position in the scene
 
 
 @dataclass
 class CharacterState:
     physical_state: str = ""
     appearance: Optional[str] = None
-    mood: str = ""
-    mood_trajectory: Optional[str] = None
-    energy_level: Optional[str] = None
-
-
-@dataclass
-class Relationship:
-    stage: str = ""
-    trust_level: Optional[str] = None
-    unresolved_thread: Optional[str] = None
+    position: str = ""  # exact position in the scene
 
 
 @dataclass
@@ -57,11 +51,9 @@ class Meta:
     turn_count_in_scene: int = 0
     last_updated_turn_index: int = 0
     confidence: float = 1.0
-    # Narrative time: how many in-story days have passed since the start. Each
-    # day/night boundary (a night/evening -> morning/dawn time_of_day advance,
-    # or an explicit "next morning"/slept cue the LLM reports) increments it.
-    # The AI uses this to estimate elapsed story time ("in 3 weeks" ~ 21 days).
-    day_count: int = 0
+    # Set False when the latest described action is physically impossible in
+    # the current state (out of reach, no room, wrong position).
+    physically_possible: bool = True
 
 
 @dataclass
@@ -69,7 +61,6 @@ class WorldIDA:
     scene: Scene = field(default_factory=Scene)
     user: UserState = field(default_factory=UserState)
     character: CharacterState = field(default_factory=CharacterState)
-    relationship: Relationship = field(default_factory=Relationship)
     meta: Meta = field(default_factory=Meta)
 
 
@@ -87,26 +78,25 @@ def _build_update_prompt(previous_ida: Optional[WorldIDA],
 
     ctx = persona_context or "No persona context provided."
 
-    return f"""You are tracking the current state of a roleplay scene. Output a compact JSON object with ONLY the fields that changed.
+    return f"""You are tracking the PHYSICAL state of a roleplay scene — only what and how the characters are: where they sit, how they sit, what they physically do, whether a described action is physically possible. No emotions, no relationships, no time of day. Output a compact JSON object with ONLY the fields that changed.
 
 SCHEMA (field names):
 {{
-  "scene": {{"location": "", "sub_location": null, "time_of_day": "", "ambient_conditions": null, "ongoing_action": "", "last_completed_action": null, "interrupted_action": null}},
-  "user": {{"physical_state": ""}},
-  "character": {{"physical_state": "", "appearance": null, "mood": "", "mood_trajectory": null, "energy_level": null}},
-  "relationship": {{"stage": "", "trust_level": null, "unresolved_thread": null}},
-  "meta": {{"scene_changed": false, "turn_count_in_scene": 0, "last_updated_turn_index": 0, "confidence": 1.0, "day_count": 0}}
+  "scene": {{"location": "", "sub_location": null, "ambient_conditions": null, "ongoing_action": ""}},
+  "user": {{"physical_state": "", "position": ""}},
+  "character": {{"physical_state": "", "appearance": null, "position": ""}},
+  "meta": {{"scene_changed": false, "turn_count_in_scene": 0, "last_updated_turn_index": 0, "confidence": 1.0, "physically_possible": true}}
 }}
 
 RULES:
 1. Output ONLY fields that changed or are new — omit unchanged fields entirely. An unchanged turn can be just {{"meta": {{"turn_count_in_scene": 5}}}}.
-2. scene_changed=true ONLY if location, time_of_day, or fundamental activity changed. Natural continuation is NOT a scene change.
+2. scene_changed=true ONLY if location or fundamental physical activity changed. Natural continuation is NOT a scene change.
 3. If scene_changed=true, reset turn_count_in_scene to 0. Otherwise increment by 1.
-4. mood and physical_state are snapshots after the latest exchange.
-5. If exchange contradicts previous state, trust the latest exchange but lower confidence.
-6. Never modify persona-level traits.
-7. Output ONLY valid JSON. No preamble, no explanation.
-8. day_count is how many in-story days have passed. Increment it by 1 when a new day begins in the story — a time skip ("the next morning", "three days later", "we slept"), a night->morning advance, or an explicit passage of time. If the story continues within the same day, leave day_count unchanged (omit it).
+4. physical_state is the character's posture/body state after the latest exchange ("sitting, leaning forward, elbows on the table"). position is exactly where each character is in the scene ("at the far end of the bar", "in the doorway", "on the left of the booth").
+5. physically_possible=false when the latest described action cannot physically happen in the current state — out of reach, no room, wrong position. Otherwise omit it (true).
+6. If exchange contradicts previous state, trust the latest exchange but lower confidence.
+7. Never modify persona-level traits.
+8. Output ONLY valid JSON. No preamble, no explanation.
 
 Previous state: {previous_json}
 Persona: {ctx}
@@ -134,24 +124,17 @@ def _ida_from_dict(data: dict) -> WorldIDA:
     meta.turn_count_in_scene = _as_int(meta.turn_count_in_scene)
     meta.last_updated_turn_index = _as_int(meta.last_updated_turn_index)
     meta.confidence = _as_float(meta.confidence)
-    meta.day_count = _as_int(meta.day_count)
+    meta.physically_possible = _as_bool(meta.physically_possible)
     return WorldIDA(
         scene=Scene(location=_text("scene", "location"),
                     sub_location=_text("scene", "sub_location") or None,
-                    time_of_day=_text("scene", "time_of_day"),
                     ambient_conditions=_text("scene", "ambient_conditions") or None,
-                    ongoing_action=_text("scene", "ongoing_action"),
-                    last_completed_action=_text("scene", "last_completed_action") or None,
-                    interrupted_action=_text("scene", "interrupted_action") or None),
-        user=UserState(physical_state=_text("user", "physical_state")),
+                    ongoing_action=_text("scene", "ongoing_action")),
+        user=UserState(physical_state=_text("user", "physical_state"),
+                       position=_text("user", "position")),
         character=CharacterState(physical_state=_text("character", "physical_state"),
                                  appearance=_text("character", "appearance") or None,
-                                 mood=_text("character", "mood"),
-                                 mood_trajectory=_text("character", "mood_trajectory") or None,
-                                 energy_level=_text("character", "energy_level") or None),
-        relationship=Relationship(stage=_text("relationship", "stage"),
-                                  trust_level=_text("relationship", "trust_level") or None,
-                                  unresolved_thread=_text("relationship", "unresolved_thread") or None),
+                                 position=_text("character", "position")),
         meta=meta,
     )
 
@@ -214,55 +197,6 @@ def _ida_to_dict(ida: WorldIDA) -> dict:
     return _strip_none(d)
 
 
-# Narrative time-of-day buckets. A transition from a night-time bucket to a
-# morning bucket marks a new in-story day (a day/night boundary) — the signal
-# the day counter advances on, so the AI's sense of elapsed story time is
-# monotonic and can never drift backward.
-_NIGHT_BUCKETS = {"night", "midnight", "evening", "dusk", "late night"}
-_MORNING_BUCKETS = {"morning", "dawn", "sunrise", "day"}
-
-
-def _tod_bucket(time_of_day: str) -> Optional[str]:
-    """Classify a time_of_day string into a coarse bucket, or None if it's a
-    non-temporal value (a location, empty, or something unclassifiable)."""
-    t = (time_of_day or "").strip().lower()
-    if t in _NIGHT_BUCKETS:
-        return "night"
-    if t in _MORNING_BUCKETS:
-        return "morning"
-    # Heuristic: "afternoon"/"noon"/"midday" are within-day, not a boundary.
-    if any(w in t for w in ("afternoon", "noon", "midday", "mid-day")):
-        return "day"
-    return None
-
-
-def _advance_day_count(previous_ida, base: dict) -> int:
-    """Return the day_count for the merged state.
-
-    The day counter is monotonic — it only ever advances, never resets or
-    decreases — so the AI's estimate of elapsed story time is always internally
-    consistent (3 weeks never becomes "a few days"). It advances when:
-      - the LLM explicitly reports a higher day_count (a time skip it can see
-        in the narrative, e.g. "three days later"), OR
-      - a night/evening time_of_day advances to morning/dawn (a day/night
-        boundary the deterministic bucketing detects).
-    An explicit LLM day_count wins over the heuristic so a multi-day skip the
-    model calls out is honored even when the intermediate nights weren't seen.
-    """
-    prev_day = previous_ida.meta.day_count if previous_ida is not None else 0
-    merged_day = _as_int(base.get("meta", {}).get("day_count", 0) or 0)
-    if merged_day > prev_day:
-        return merged_day
-
-    prev_tod = previous_ida.scene.time_of_day if previous_ida is not None else ""
-    new_tod = base.get("scene", {}).get("time_of_day", "") if isinstance(base.get("scene"), dict) else ""
-    prev_bucket = _tod_bucket(prev_tod)
-    new_bucket = _tod_bucket(new_tod)
-    if prev_bucket == "night" and new_bucket == "morning":
-        return prev_day + 1
-    return prev_day
-
-
 def _validate_ida(data: dict) -> bool:
     """Validate that the LLM response is a usable WorldIDA update.
 
@@ -272,7 +206,7 @@ def _validate_ida(data: dict) -> bool:
     """
     if not isinstance(data, dict):
         return False
-    known = {"scene", "user", "character", "relationship", "meta"}
+    known = {"scene", "user", "character", "meta"}
     provided = [k for k in data if k in known]
     if not provided:
         return False
@@ -378,18 +312,6 @@ async def update_world_ida(
                     meta["turn_count_in_scene"] = 0
                 else:
                     meta["turn_count_in_scene"] = meta.get("turn_count_in_scene", 0) + 1
-            # Narrative day counter. This is the single source of truth for how
-            # much in-story time has passed, and it is monotonic — it only ever
-            # advances, never resets or decreases. That monotonicity is what
-            # keeps the AI's estimates internally consistent: once it has said
-            # "3 weeks", a later turn can never contradict it with "a few days",
-            # because day_count only grows. The LLM's explicit report (a time
-            # skip it can see, e.g. "three days later") wins over the heuristic;
-            # otherwise a night->morning time_of_day advance counts as one new
-            # day. Set the result on base so the merged state carries it.
-            base.setdefault("meta", {})["day_count"] = _advance_day_count(
-                previous_ida, base
-            )
             new_ida = _ida_from_dict(base)
         else:
             new_ida = _ida_from_dict(parsed)
@@ -411,13 +333,14 @@ async def update_world_ida(
 
 def world_ida_to_context_string(ida: WorldIDA) -> str:
     """
-    Compact natural language representation, ~80 tokens, omitting null fields.
+    Compact natural language representation of the PHYSICAL state, ~80 tokens,
+    omitting null fields.
 
     Example:
-        "Current scene: corner booth at a restaurant, evening. Elena is
-        leaning forward, telling a story about her sister — mood: wistful,
-        slightly tipsy. You are seated, holding a wine glass. Relationship:
-        flirtatious, early stage."
+        "Current scene: corner booth at a tavern. You are seated on the left
+        of the booth. Elena is seated across from you, leaning forward,
+        elbows on the table. Currently: drinking ale. Note: this action is
+        physically impossible in the current state."
     """
     parts = []
 
@@ -427,8 +350,6 @@ def world_ida_to_context_string(ida: WorldIDA) -> str:
         scene_parts.append(ida.scene.location)
     if ida.scene.sub_location:
         scene_parts.append(ida.scene.sub_location)
-    if ida.scene.time_of_day:
-        scene_parts.append(ida.scene.time_of_day)
     if scene_parts:
         s = f"Current scene: {', '.join(scene_parts)}."
         if ida.scene.ambient_conditions:
@@ -439,45 +360,29 @@ def world_ida_to_context_string(ida: WorldIDA) -> str:
     char_parts = []
     if ida.character.physical_state:
         char_parts.append(ida.character.physical_state)
-    if ida.character.mood:
-        mood = f"mood: {ida.character.mood}"
-        if ida.character.mood_trajectory:
-            mood += f", {ida.character.mood_trajectory}"
-        char_parts.append(mood)
-    if ida.character.energy_level:
-        char_parts.append(f"energy: {ida.character.energy_level}")
+    if ida.character.position:
+        char_parts.append(f"position: {ida.character.position}")
+    if ida.character.appearance:
+        char_parts.append(f"appearance: {ida.character.appearance}")
     if char_parts:
         parts.append("Character is " + ". ".join(char_parts) + ".")
 
     # User
+    user_parts = []
     if ida.user.physical_state:
-        parts.append(f"You are {ida.user.physical_state}.")
-
-    # Relationship
-    rel_parts = []
-    if ida.relationship.stage:
-        rel_parts.append(ida.relationship.stage)
-    if ida.relationship.trust_level:
-        rel_parts.append(f"trust: {ida.relationship.trust_level}")
-    if ida.relationship.unresolved_thread:
-        rel_parts.append(f"unresolved: {ida.relationship.unresolved_thread}")
-    if rel_parts:
-        parts.append("Relationship: " + ", ".join(rel_parts) + ".")
+        user_parts.append(ida.user.physical_state)
+    if ida.user.position:
+        user_parts.append(f"position: {ida.user.position}")
+    if user_parts:
+        parts.append("You are " + ". ".join(user_parts) + ".")
 
     # Ongoing action
     if ida.scene.ongoing_action:
         parts.append(f"Currently: {ida.scene.ongoing_action}.")
 
-    # Narrative time. The monotonic day_count is the single source of truth for
-    # how much in-story time has passed, so the AI can give consistent elapsed
-    # estimates ("3 weeks" never drifts to "a few days"). Omit it on day 0 (the
-    # opening scene) to avoid cluttering the context before any time has passed.
-    if ida.meta.day_count > 0:
-        elapsed = ida.meta.day_count - 1
-        if elapsed == 0:
-            parts.append(f"It is {ida.scene.time_of_day or 'a new day'} of day {ida.meta.day_count} — about a day has passed since the story began.")
-        else:
-            parts.append(f"It is {ida.scene.time_of_day or 'a new day'} of day {ida.meta.day_count} — roughly {elapsed} day{'s' if elapsed != 1 else ''} have passed since the story began.")
+    # Physical feasibility
+    if not ida.meta.physically_possible:
+        parts.append("Note: the latest described action is physically impossible in the current state.")
 
     return " ".join(parts)
 
@@ -489,10 +394,6 @@ def scene_transition_summary(old_ida: WorldIDA) -> str:
     parts = []
     if old_ida.scene.location:
         parts.append(f"at {old_ida.scene.location}")
-    if old_ida.relationship.stage:
-        parts.append(f"relationship: {old_ida.relationship.stage}")
-    if old_ida.relationship.unresolved_thread:
-        parts.append(f"unresolved: {old_ida.relationship.unresolved_thread}")
     if old_ida.scene.ongoing_action:
         parts.append(f"was: {old_ida.scene.ongoing_action}")
     return f"Scene ended: {', '.join(parts)}." if parts else "Scene ended."
@@ -559,7 +460,7 @@ class WorldIDAStore:
         a = _ida_to_dict(after)
         changes = {}
 
-        for section in ["scene", "user", "character", "relationship", "meta"]:
+        for section in ["scene", "user", "character", "meta"]:
             b_sec = b.get(section, {})
             a_sec = a.get(section, {})
             sec_changes = {}

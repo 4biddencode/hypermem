@@ -40,7 +40,7 @@ endpoint) and ships with a Python engine, a REST server, live world-state
 tracking (`worldIDA`), and JSON persistence.
 
 It is also **register-agnostic**: the judge classifies, the store is
-verbatim, and worldIDA tracks relationship state. None of it filters or
+verbatim, and worldIDA tracks physical state. None of it filters or
 reshapes content, so it serves **every roleplay type identically**: SFW,
 suggestive, explicit. A companion app never has to run two memory stacks.
 
@@ -57,8 +57,10 @@ suggestive, explicit. A companion app never has to run two memory stacks.
 - **Type-aware lifecycle** - a newer fact about the same subject
   *supersedes* the old one; episodic events consolidate into durable
   knowledge; decay archives what stops mattering.
-- **Live world-state (`worldIDA`)** - one compact state object per session
-  (scene, mood, relationship), fully rewritten every turn, injected in full.
+- **Live world-state (`worldIDA`)** - one compact **physical** state object
+  per session (scene, positions, physical state, feasibility), fully rewritten
+  every turn, injected in full. Narrative time (time of day, elapsed story
+  days) gets its own block.
 - **Provenance** - for any memory and any query, the live score breakdown.
   No magic, no black box.
 - **REST + Python** - same engine over HTTP (`hypermem-server`) or inline.
@@ -94,8 +96,9 @@ suggestive, explicit. A companion app never has to run two memory stacks.
   decays what stops mattering.
 - **Recall** ranks by a hybrid score and injects only what fits the context
   budget.
-- **worldIDA** tracks the live scene and relationship state, injected in
-  full every turn.
+- **worldIDA** tracks the live physical scene state, injected in full every
+  turn; narrative time (morning/evening, elapsed days) rides alongside in its
+  own block.
 
 ## Get started (60 seconds)
 
@@ -236,21 +239,27 @@ server survives restarts. No database, no external service.
 
 ## worldIDA (live world-state)
 
-One compact state object per session - scene, mood, relationship - fully
-rewritten every turn and injected in full. It is the "here and now" that
-episodic memories are too slow to capture:
+One compact state object per session tracking **only the physical world** -
+where the scene is, how each character is sitting, exactly where they are,
+whether a described action is physically possible. Fully rewritten every turn
+and injected in full. It is the "here and now" that episodic memories are too
+slow to capture:
 
 ```json
 {
-  "scene": "coffee shop in Vienna, late afternoon",
-  "mood": "relaxed",
-  "relationship": {
-    "closeness": 0.7,
-    "trust": 0.6,
-    "history": ["met at a cafe", "shared a hike plan"]
-  }
+  "scene": {"location": "tavern", "sub_location": "corner booth",
+            "ongoing_action": "drinking ale"},
+  "user": {"physical_state": "seated at the table", "position": "left of the booth"},
+  "character": {"physical_state": "leaning forward", "position": "across from you"},
+  "meta": {"physically_possible": true}
 }
 ```
+
+Emotional/social state (mood, relationship) is deliberately **not** tracked -
+worldIDA is physical-only. Narrative time (time of day + how many in-story
+days have passed, via a monotonic counter) is a separate `[NARRATIVE TIME]`
+context block, so the AI still knows it's morning of day 3 without polluting
+the physical state.
 
 ## Persona isolation
 
