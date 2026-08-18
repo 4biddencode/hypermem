@@ -12,6 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml"><img src="https://github.com/4biddencode/hypermem/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/hypermem/"><img src="https://img.shields.io/pypi/v/hypermem.svg" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-source--available-blue.svg" alt="License: Source-Available"></a>
   <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
   <a href="https://github.com/4biddencode/hypermem"><img src="https://img.shields.io/badge/llms-ollama%20%7C%20openai%20%7C%20anthropic-blue.svg" alt="Ollama / OpenAI / Anthropic"></a>
@@ -99,12 +100,11 @@ suggestive, explicit. A companion app never has to run two memory stacks.
 ## Get started (60 seconds)
 
 ```bash
-# 1 - Install (from source; not yet on PyPI)
-git clone https://github.com/4biddencode/hypermem.git && cd hypermem
-pip install -e .            # core (any LLM via Ollama/OpenAI/Anthropic)
-pip install -e ".[server]"  # + REST server (fastapi, uvicorn)
-# or, straight from GitHub:
-# pip install -e "git+https://github.com/4biddencode/hypermem"
+# 1 - Install
+pip install hypermem            # core (any LLM via Ollama/OpenAI/Anthropic)
+pip install "hypermem[server]"  # + REST server (fastapi, uvicorn)
+# or, from source:
+# git clone https://github.com/4biddencode/hypermem.git && cd hypermem && pip install -e .
 
 # 2 - Point it at your LLM (default: Ollama, qwen2.5:7b on localhost:11434)
 ollama serve                # if you haven't already

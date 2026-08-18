@@ -45,6 +45,9 @@ hypermem-server = "hypermem.server:main"
 [project.urls]
 Homepage = "https://github.com/4biddencode/hypermem"
 Repository = "https://github.com/4biddencode/hypermem"
+Documentation = "https://github.com/4biddencode/hypermem#readme"
+Issues = "https://github.com/4biddencode/hypermem/issues"
+Changelog = "https://github.com/4biddencode/hypermem/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hypermem"]
@@ -52,6 +55,20 @@ packages = ["hypermem"]
 # Ship the PEP 561 marker so type checkers treat HyperMEM as fully typed.
 [tool.hatch.build.targets.wheel.force-include]
 "hypermem/py.typed" = "hypermem/py.typed"
+
+# Keep the sdist lean: package + docs only. Dev artifacts (tests, benchmarks,
+# CI, scratch docs) live on GitHub, not in the distribution.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".claude",
+    ".github",
+    "assets",
+    "benchmarks",
+    "examples",
+    "tests",
+    "LOGIC_REVIEW.md",
+    ".gitignore",
+]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not live'"
