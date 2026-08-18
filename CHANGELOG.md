@@ -3,6 +3,14 @@
 All notable changes to HyperMEM are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] — 2026-08-18
+
+### Changed
+
+- README now opens with the banner image and closes with the footer image
+  (absolute `raw.githubusercontent.com` URLs, so they render on GitHub and
+  PyPI).
+
 ## [1.0.1] — 2026-08-18
 
 ### Fixed
