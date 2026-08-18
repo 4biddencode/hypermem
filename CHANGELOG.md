@@ -3,6 +3,17 @@
 All notable changes to HyperMEM are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] — 2026-08-18
+
+### Fixed
+
+- README links now point at absolute GitHub URLs so they render correctly on
+  PyPI (relative links 404ed there). Added the missing `CONTRIBUTING.md`.
+- worldIDA is now physical-only: scene, positions, physical state, and a
+  `physically_possible` flag. Emotional/social state and narrative time were
+  removed from it. Time of day and the monotonic day counter moved to a
+  separate `[NARRATIVE TIME]` context block.
+
 ## [1.0.0] — 2026-08-13
 
 ### Full rework: a memory layer that actually works

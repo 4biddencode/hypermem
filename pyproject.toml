@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hypermem"
-version = "1.0.0"
+version = "1.0.1"
 description = "AI memory layer that never forgets what matters — judge, store, recall, inject"
 readme = "README.md"
 # Custom source-available license (not an SPDX id). PEP 639: point PyPI at the
